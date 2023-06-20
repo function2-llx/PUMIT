@@ -144,15 +144,28 @@ class Default2DLoaderMixin:
 
 class MinPercentileCropperMixin:
     min_p: float = 0.5
+    exclude_min: bool = True
 
     def get_cropper(self):
         def select_fn(img: MetaTensor):
-            v = mt.percentile(img.view(img.shape[0], -1).float(), self.min_p, dim=1)
-            for _ in range(img.ndim - 1):
-                v = v[..., None]
-            return (img > v).all(dim=0, keepdim=True)
+            mask = None
+            for i, c in enumerate(img.float()):
+                if self.exclude_min:
+                    min_v = c.min()
+                    v = mt.percentile(c[c > min_v], self.min_p)
+                else:
+                    v = mt.percentile(c, self.min_p)
+                if mask is None:
+                    mask = c > v
+                else:
+                    mask &= c > v
+            return mask[None]
 
         return mt.CropForeground(select_fn)
+
+# a function f(n) that n*f(n)→1 (n→1), n*f(n)→2 (n→∞)
+def adaptive_weight(n: int):
+    return (2 * n - 1) / n ** 2
 
 class ACDCProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
     name = 'ACDC'
@@ -164,11 +177,12 @@ class ACDCProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProc
             for patient_dir in (self.dataset_root / split).iterdir() if patient_dir.is_dir()
         ]
 
-    def process_file_data(self, key: str, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
+    def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
         t = data.shape[0]
+        # cine MRI results in very similar scans, empirically adjust the weight
+        weight = adaptive_weight(t) * file.weight
         return [
-            # cine MRI results in very similar scans, empirically adjust the weight
-            self.process_image(data[i:i + 1], f'{key}-{i}', 'MRI', cropper, weight=2 / t)
+            self.process_image(data[i:i + 1], f'{file.key}-{i}', 'MRI', cropper, weight)
             for i in range(t)
         ]
 
@@ -189,6 +203,18 @@ class AMOS22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPr
 
 class BrainPTM2021Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
     name = 'BrainPTM-2021'
+
+    def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
+        if file.modality != 'MRI/DWI':
+            return super().process_file_data(file, data, cropper)
+        d_weight = adaptive_weight(data.shape[0] - 1) * file.weight
+        return [
+            self.process_image(data[0:1], f'{file.key}-0', file.modality, cropper, weight=file.weight),
+            *[
+                self.process_image(data[i:i + 1], f'{file.key}-{i}', file.modality, cropper, d_weight)
+                for i in range(1, data.shape[0])
+            ]
+        ]
 
     def get_image_files(self):
         ret = []
@@ -379,7 +405,30 @@ class IXIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProce
     name = 'IXI'
 
     def get_image_files(self) -> Sequence[ImageFile]:
-        pass
+        suffix = '.nii.gz'
+        ret = [
+            ImageFile(path.name[:-len(suffix)], f'MRI/{modality}', path)
+            for modality in ['T1', 'T2', 'PD', 'MRA']
+            for path in (self.dataset_root / f'IXI-{modality}').glob(f'*{suffix}')
+        ][:10]
+        dti_groups: dict[str, list[tuple[int, Path]]] = {}
+        for path in (self.dataset_root / 'IXI-DTI').glob(f'*{suffix}'):
+            group, idx = path.name[:-len(suffix)].rsplit('-', 1)
+            dti_groups.setdefault(group, []).append((int(idx), path))
+        for group, items in dti_groups.items():
+            all_idxes = [x[0] for x in items]
+            if (min_idx := min(all_idxes)) != 0:
+                print('missing zero:', group)
+            if max(all_idxes) - min_idx + 1 != len(items):
+                print('missing some diffusion:', group)
+            d_weight = adaptive_weight(len(items) - 1)
+            ret.extend([
+                # not using `group` for key to keep the original formatting
+                ImageFile(path.name[:-len(suffix)], 'MRI/DTI', path, weight=1 if i == 0 else d_weight)
+                for i, path in items
+            ])
+
+        return ret[:20]
 
 class KaggleRDCProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
     name = 'kaggle-RDC'
@@ -480,6 +529,7 @@ def main():
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('datasets', nargs='*', type=str)
+    parser.add_argument('--ie', action='store_true')
     args = parser.parse_args()
     for dataset in args.datasets:
         processor_cls: type[DatasetProcessor] | None = globals().get(f'{dataset}Processor', None)
@@ -488,10 +538,14 @@ def main():
         else:
             processor = processor_cls()
             print(dataset)
-            try:
+            if args.ie:
+                try:
+                    processor.process()
+                except Exception:
+                    import traceback
+                    print(traceback.format_exc())
+            else:
                 processor.process()
-            except Exception:
-                pass
 
 if __name__ == '__main__':
     main()

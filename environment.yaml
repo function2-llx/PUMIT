@@ -21,6 +21,7 @@ dependencies:
   - scipy
   - openpyxl
   - nibabel
+  - itk
   - pydicom
 
   - pip
