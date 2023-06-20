@@ -20,8 +20,9 @@ PROCESSED_ROOT.mkdir(exist_ok=True, parents=True)
 @dataclass
 class ImageFile:
     key: str
-    modality: str
+    modality: str | list[str]
     path: Path
+    weight: float = 1
 
 class DatasetProcessor(ABC):
     name: str
@@ -73,9 +74,18 @@ class DatasetProcessor(ABC):
         return ret
 
     def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
-        return [self.process_image(data, file.key, file.modality, cropper, weight=1)]
+        if isinstance(file.modality, str):
+            return [self.process_image(data, file.key, file.modality, cropper, file.weight)]
+        else:
+            assert isinstance(file.modality, list) and len(file.modality) == data.shape[0]
+            if len(file.modality) == 1:
+                return [self.process_image(data, file.key, file.modality[0], cropper, file.weight)]
+            return [
+                self.process_image(data[i:i + 1], f'{file.key}-m{i}', modality, cropper, file.weight)
+                for i, modality in enumerate(file.modality)
+            ]
 
-    def process_image(self, img: MetaTensor, key: str, modality: str, cropper: Callable[[MetaTensor], MetaTensor], weight: float) -> dict:
+    def process_image(self, img: MetaTensor, key: str, modality: str | dict, cropper: Callable[[MetaTensor], MetaTensor], weight: float) -> dict:
         cropped = cropper(img)
         save_path = self.output_root / 'data' / f'{key}.npz'
         np.savez(save_path, array=cropped.numpy(), affine=cropped.affine)
@@ -109,7 +119,8 @@ class Default3DLoaderMixin:
     def get_loader(self):
         return mt.Compose([
             mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
-            mt.Orientation('RAS')
+            mt.Orientation('RAS'),
+            MetaTensor.contiguous,
         ])
 
 class Default2DLoaderMixin:
@@ -394,6 +405,77 @@ class LIDCIDRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Dataset
             for path in meta['File Location']
         ]
 
+class MRSpineSegProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'MRSpineSeg_Challenge_SMU'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        suffix = '.nii.gz'
+        return [
+            ImageFile(path.name[:-len(suffix)], 'MRI/T2', path)
+            for path in self.dataset_root.rglob(f'*{suffix}')
+        ]
+
+class MSDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    def get_modality(self) -> list[str]:
+        import json
+        meta = json.loads(Path(self.dataset_root / 'dataset.json').read_bytes())
+        modality = meta['modality']
+        return [modality[str(i)] for i in range(len(modality))]
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        modality = self.get_modality()
+        suffix = '.nii.gz'
+        return [
+            ImageFile(path.name[:-len(suffix)], modality, path)
+            for path in self.dataset_root.glob(f'images*/*{suffix}')
+        ]
+
+class MSDBrainTumourProcessor(MSDProcessor):
+    name = 'MSD/Task01_BrainTumour'
+
+    def get_modality(self) -> list[str]:
+        mapping = {
+            'FLAIR': 'T2-FLAIR',
+            'T1w': 'T1',
+            't1gd': 'T1c',
+            'T2w': 'T2'
+        }
+        return [f'MRI/{mapping[m]}' for m in super().get_modality()]
+
+class MSDHeartProcessor(MSDProcessor):
+    name = 'MSD/Task02_Heart'
+
+class MSDLiverProcessor(MSDProcessor):
+    name = 'MSD/Task03_Liver'
+
+class MSDHippocampusProcessor(MSDProcessor):
+    name = 'MSD/Task04_Hippocampus'
+
+    def get_modality(self) -> list[str]:
+        # according to https://arxiv.org/pdf/1902.09063.pdf Methods.Datasets.Task04_Hippocampus
+        return ['MRI/T1']
+
+class MSDProstateProcessor(MSDProcessor):
+    name = 'MSD/Task05_Prostate'
+
+    def get_modality(self) -> list[str]:
+        return [f'MRI/{m}' for m in super().get_modality()]
+
+class MSDLungProcessor(MSDProcessor):
+    name = 'MSD/Task06_Lung'
+
+class MSDPancreasProcessor(MSDProcessor):
+    name = 'MSD/Task07_Pancreas'
+
+class MSDHepaticVesselProcessor(MSDProcessor):
+    name = 'MSD/Task08_HepaticVessel'
+
+class MSDSpleenProcessor(MSDProcessor):
+    name = 'MSD/Task09_Spleen'
+
+class MSDColonProcessor(MSDProcessor):
+    name = 'MSD/Task10_Colon'
+
 def main():
     from argparse import ArgumentParser
     parser = ArgumentParser()
@@ -406,7 +488,10 @@ def main():
         else:
             processor = processor_cls()
             print(dataset)
-            processor.process()
+            try:
+                processor.process()
+            except Exception:
+                pass
 
 if __name__ == '__main__':
     main()
