@@ -8,10 +8,12 @@ from pathlib import Path
 import cytoolz
 import numpy as np
 import pandas as pd
+import torch
 from tqdm.contrib.concurrent import process_map
 
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
+from monai.utils import ImageMetaKey
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('datasets-PUMT')
@@ -131,9 +133,9 @@ class Default2DLoaderMixin:
 
     def adapt_to_3d(self, img: MetaTensor):
         if self.assert_gray_scale:
-            from monai.utils import ImageMetaKey
-            assert (img[0] == img[1]).all() and (img[0] == img[2]).all(), img.meta[ImageMetaKey.FILENAME_OR_OBJ]
-            img = img[0:1]
+            if img.shape[0] != 1:
+                assert (img[0] == img[1]).all() and (img[0] == img[2]).all(), img.meta[ImageMetaKey.FILENAME_OR_OBJ]
+                img = img[0:1]
         img = img.unsqueeze(self.dummy_dim + 1)
         img.affine[self.dummy_dim, self.dummy_dim] = 1e8
         return img
@@ -144,36 +146,48 @@ class Default2DLoaderMixin:
             self.adapt_to_3d,
         ])
 
-class MinPercentileCropperMixin:
-    min_p: float = 0.5
-    exclude_min: bool = True
+class ValueBasedCropper(ABC):
+    @abstractmethod
+    def get_crop_value(self, img: MetaTensor):
+        pass
 
     def get_cropper(self):
         def select_fn(img: MetaTensor):
-            mask = None
-            for i, c in enumerate(img.float()):
-                if self.exclude_min:
-                    min_v = c.min()
-                    v = mt.percentile(c[c > min_v], self.min_p)
-                else:
-                    v = mt.percentile(c, self.min_p)
-                if mask is None:
-                    mask = c > v
-                else:
-                    mask &= c > v
-            return mask[None]
+            v = torch.tensor(self.get_crop_value(img))
+            if v.numel() != 1:
+                assert v.ndim == 1 and v.shape[0] == img.shape[0]
+                for _ in range(img.ndim - 1):
+                    v = v[..., None]
+            return (img > v).all(dim=0, keepdim=True)
 
         return mt.CropForeground(select_fn)
 
-class NaturalImageCropperMixin(MinPercentileCropperMixin):
-    min_p = 0
-    exclude_min = False
+class PercentileCropperMixin(ValueBasedCropper):
+    min_p: float = 0.5
+    exclude_min: bool = True
+
+    def get_crop_value(self, img: MetaTensor):
+        ret = torch.empty(img.shape[0])
+        for i, c in enumerate(img.float()):
+            if self.exclude_min:
+                min_v = c.min()
+                ret[i] = mt.percentile(c[c > min_v], self.min_p)
+            else:
+                ret[i] = mt.percentile(c, self.min_p)
+            
+        return ret
+
+class ConstantCropperMixin(ValueBasedCropper):
+    v: float | int = 0
+    
+    def get_crop_value(self, _img):
+        return self.v
 
 # a function f(n) that n*f(n)→1 (n→1), n*f(n)→2 (n→∞)
 def adaptive_weight(n: int):
     return (2 * n - 1) / n ** 2
 
-class ACDCProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class ACDCProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'ACDC'
 
     def get_image_files(self):
@@ -192,7 +206,7 @@ class ACDCProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProc
             for i in range(t)
         ]
 
-class AMOS22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class AMOS22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'AMOS22'
 
     def get_image_files(self):
@@ -207,7 +221,7 @@ class AMOS22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPr
             for path in (self.dataset_root / 'amos22').glob('images*/*.nii.gz')
         ]
 
-class BrainPTM2021Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class BrainPTM2021Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'BrainPTM-2021'
 
     def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
@@ -230,7 +244,7 @@ class BrainPTM2021Processor(Default3DLoaderMixin, MinPercentileCropperMixin, Dat
             ret.append(ImageFile(f'{key}-DWI', 'MRI/DWI', case_dir / 'Diffusion.nii.gz'))
         return ret
 
-class BraTS2023SegmentationProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class BraTS2023SegmentationProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     def get_image_files(self) -> Sequence[ImageFile]:
         modality_map = {
             't1c': 'MRI/T1c',
@@ -260,7 +274,7 @@ class BraTS2023PEDProcessor(BraTS2023SegmentationProcessor):
 class BraTS2023SSAProcessor(BraTS2023SegmentationProcessor):
     name = 'BraTS2023/BraTS-SSA'
 
-class BCVProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class BCVProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     def get_image_files(self) -> Sequence[ImageFile]:
         import re
         pattern = re.compile(r'\d+')
@@ -277,7 +291,7 @@ class BCVAbdomenProcessor(BCVProcessor):
 class BCVCervixProcessor(BCVProcessor):
     name = 'BCV/Cervix'
 
-class CGMHPelvisProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class CGMHPelvisProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CGMH Pelvis'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -286,7 +300,7 @@ class CGMHPelvisProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, Datase
             for path in (self.dataset_root / 'CGMH_PelvisSegment' / 'Image').glob('*.png')
         ]
 
-class ChákṣuProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class ChákṣuProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'Chákṣu'
     min_p = 0
     exclude_min = False
@@ -298,7 +312,7 @@ class ChákṣuProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, Dataset
             for path in image_dir.iterdir() if path.suffix.lower() in ['.png', '.jpg']
         ]
 
-class CHAOSProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class CHAOSProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'CHAOS'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -319,7 +333,7 @@ class CHAOSProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPro
 
         return ret
 
-class CrossMoDA2022Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class CrossMoDA2022Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'crossMoDA2022'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -340,7 +354,7 @@ class CrossMoDA2022Processor(Default3DLoaderMixin, MinPercentileCropperMixin, Da
                 ret.append(ImageFile(f'{key}', modality, path))
         return ret
 
-class CHASEDB1Processor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class CHASEDB1Processor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CHASE_DB1'
     min_p = 0
     exclude_min = False
@@ -351,7 +365,7 @@ class CHASEDB1Processor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetP
             for i, side in it.product(range(1, 15), ('L', 'R'))
         ]
 
-class CHUACProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class CHUACProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CHUAC'
     min_p = 0
     exclude_min = False
@@ -362,7 +376,7 @@ class CHUACProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProc
             for i in range(1, 31)
         ]
 
-class EPISURGProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class EPISURGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'EPISURG'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -372,7 +386,7 @@ class EPISURGProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetP
             ret.append(ImageFile(key, 'MRI/T1', path))
         return ret
 
-class FLARE22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class FLARE22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'FLARE22'
 
     def get_image_files(self):
@@ -387,7 +401,7 @@ class FLARE22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetP
             for folder in image_folders for path in folder.glob(f'*{suffix}')
         ]
 
-class HaNSegProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class HaNSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'HaN-Seg'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -413,7 +427,7 @@ def file_sha3(filepath: Path):
 
     return sha3_hash.hexdigest()
 
-class IDRiDProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class IDRiDProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'IDRiD'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -429,7 +443,7 @@ class IDRiDProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProc
                 ret.append(ImageFile(key, 'RGB/fundus', path))
         return ret
 
-class IXIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class IXIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'IXI'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -458,7 +472,7 @@ class IXIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProce
 
         return ret[:20]
 
-class KaggleRDCProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class KaggleRDCProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'Kaggle-RDC'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -467,7 +481,7 @@ class KaggleRDCProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, Dataset
             for path in self.dataset_root.rglob('*.png')
         ]
 
-class LIDCIDRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class LIDCIDRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'LIDC-IDRI'
     reader = PydicomReader
 
@@ -483,7 +497,7 @@ class LIDCIDRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Dataset
             for path in meta['File Location']
         ]
 
-class MRSpineSegProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class MRSpineSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'MRSpineSeg_Challenge_SMU'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -493,7 +507,7 @@ class MRSpineSegProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Datas
             for path in self.dataset_root.rglob(f'*{suffix}')
         ]
 
-class MSDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class MSDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     def get_modality(self) -> list[str]:
         import json
         meta = json.loads(Path(self.dataset_root / 'dataset.json').read_bytes())
@@ -554,16 +568,23 @@ class MSDSpleenProcessor(MSDProcessor):
 class MSDColonProcessor(MSDProcessor):
     name = 'MSD/Task10_Colon'
 
-class NIHChestXRayProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
-    name = 'NIH Chest X-ray/CXR8'
+class NIHChestXRayProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+    name = 'NIH Chest X-ray'
+    assert_gray_scale = True
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'CXR8'
 
     def get_image_files(self) -> Sequence[ImageFile]:
+
         return [
             ImageFile(path.stem, 'RGB/XR', path)
-            for path in (self.dataset_root / 'images' / 'images').glob('*.png')
+            for path in [Path('datasets/NIH Chest X-ray/CXR8/images/images/00000766_000.png')]
+            # for path in (self.dataset_root / 'images' / 'images').glob('*.png')
         ]
 
-class PelviXNetProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+class PelviXNetProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'PelviXNet'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -572,7 +593,7 @@ class PelviXNetProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, Dataset
             for path in (self.dataset_root / 'pxr-150' / 'images_all').glob('*.png')
         ]
 
-class PICAIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class PICAIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'PI-CAI'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -588,7 +609,7 @@ class PICAIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPro
             for path in (self.dataset_root / 'public_images').rglob('*.mha')
         ]
 
-class Prostate158Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class Prostate158Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'Prostate158'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -603,9 +624,13 @@ class Prostate158Processor(Default3DLoaderMixin, MinPercentileCropperMixin, Data
             for modality_suffix, modality in mapping.items()
         ]
 
-class PROSTATEMRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class PROSTATEMRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     reader = 'pydicomreader'
-    name = 'PROSTATE-MRI/PROSTATE-MRI-5-18-2018-doiJNLP-dKJJAqnS'
+    name = 'PROSTATE-MRI'
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'PROSTATE-MRI-5-18-2018-doiJNLP-dKJJAqnS'
 
     def get_image_files(self) -> Sequence[ImageFile]:
         mapping = {
@@ -624,7 +649,7 @@ class PROSTATEMRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Data
             ))
         return ret
 
-class RibFracProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class RibFracProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'RibFrac'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -634,7 +659,7 @@ class RibFracProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetP
             for path in self.dataset_root.glob(f'*/*{suffix}')
         ]
 
-class RSNA2020PEDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class RSNA2020PEDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'RSNA-2020-PED'
     reader = PydicomReader
 
@@ -644,7 +669,7 @@ class RSNA2020PEDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Data
             for path in self.dataset_root.glob('*/*/*')
         ]
 
-class RSNA2022CSFDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class RSNA2022CSFDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'RSNA-2022-CSFD'
     reader = PydicomReader
 
@@ -655,7 +680,7 @@ class RSNA2022CSFDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, Dat
             for path in (self.dataset_root / f'{split}_images').iterdir()
         ]
 
-class STOICProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class STOICProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'STOIC'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -664,7 +689,7 @@ class STOICProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPro
             for path in (self.dataset_root / 'stoic2021-training' / 'data' / 'mha').glob('*.mha')
         ]
 
-class TotalSegmentatorProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class TotalSegmentatorProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'TotalSegmentator'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -676,7 +701,7 @@ class TotalSegmentatorProcessor(Default3DLoaderMixin, MinPercentileCropperMixin,
             if (key := path.parent.name) != 's0864'
         ]
 
-class VerSeProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class VerSeProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'VerSe'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -685,8 +710,12 @@ class VerSeProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetPro
             for path in self.dataset_root.glob('*/rawdata/*/*.nii.gz')
         ]
 
-class VSSEGProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
-    name = 'Vestibular-Schwannoma-SEG/Vestibular-Schwannoma-SEG Feb 2021 manifest'
+class VSSEGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    name = 'Vestibular-Schwannoma-SEG'
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'Vestibular-Schwannoma-SEG Feb 2021 manifest'
 
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
