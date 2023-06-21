@@ -127,15 +127,17 @@ class Default3DLoaderMixin:
             MetaTensor.contiguous,
         ])
 
-class Default2DLoaderMixin:
+class NaturalImageLoaderMixin:
     dummy_dim: int = 1  # it seems that most 2D medical images are taken in the coronal plane
     assert_gray_scale: bool = False
 
-    def adapt_to_3d(self, img: MetaTensor):
-        if self.assert_gray_scale:
-            if img.shape[0] != 1:
-                assert (img[0] == img[1]).all() and (img[0] == img[2]).all(), img.meta[ImageMetaKey.FILENAME_OR_OBJ]
-                img = img[0:1]
+    def check_and_adapt_to_3d(self, img: MetaTensor):
+        if img.shape[0] == 4:
+            assert (img[3] == 255).all()
+            img = img[:3]
+        if self.assert_gray_scale and img.shape[0] != 1:
+            assert (img[0] == img[1]).all() and (img[0] == img[2]).all()
+            img = img[0:1]
         img = img.unsqueeze(self.dummy_dim + 1)
         img.affine[self.dummy_dim, self.dummy_dim] = 1e8
         return img
@@ -143,7 +145,7 @@ class Default2DLoaderMixin:
     def get_loader(self):
         return mt.Compose([
             mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
-            self.adapt_to_3d,
+            self.check_and_adapt_to_3d,
         ])
 
 class ValueBasedCropper(ABC):
@@ -291,7 +293,7 @@ class BCVAbdomenProcessor(BCVProcessor):
 class BCVCervixProcessor(BCVProcessor):
     name = 'BCV/Cervix'
 
-class CGMHPelvisProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class CGMHPelvisProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CGMH Pelvis'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -300,7 +302,7 @@ class CGMHPelvisProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetPro
             for path in (self.dataset_root / 'CGMH_PelvisSegment' / 'Image').glob('*.png')
         ]
 
-class ChákṣuProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class ChákṣuProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'Chákṣu'
     min_p = 0
     exclude_min = False
@@ -354,7 +356,7 @@ class CrossMoDA2022Processor(Default3DLoaderMixin, PercentileCropperMixin, Datas
                 ret.append(ImageFile(f'{key}', modality, path))
         return ret
 
-class CHASEDB1Processor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class CHASEDB1Processor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CHASE_DB1'
     min_p = 0
     exclude_min = False
@@ -365,7 +367,7 @@ class CHASEDB1Processor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProce
             for i, side in it.product(range(1, 15), ('L', 'R'))
         ]
 
-class CHUACProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class CHUACProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CHUAC'
     min_p = 0
     exclude_min = False
@@ -427,7 +429,7 @@ def file_sha3(filepath: Path):
 
     return sha3_hash.hexdigest()
 
-class IDRiDProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class IDRiDProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'IDRiD'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -472,7 +474,7 @@ class IXIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcesso
 
         return ret[:20]
 
-class KaggleRDCProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class KaggleRDCProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'Kaggle-RDC'
 
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -568,7 +570,7 @@ class MSDSpleenProcessor(MSDProcessor):
 class MSDColonProcessor(MSDProcessor):
     name = 'MSD/Task10_Colon'
 
-class NIHChestXRayProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class NIHChestXRayProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'NIH Chest X-ray'
     assert_gray_scale = True
 
@@ -577,14 +579,12 @@ class NIHChestXRayProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetP
         return DATASETS_ROOT / self.name / 'CXR8'
 
     def get_image_files(self) -> Sequence[ImageFile]:
-
         return [
             ImageFile(path.stem, 'RGB/XR', path)
-            for path in [Path('datasets/NIH Chest X-ray/CXR8/images/images/00000766_000.png')]
-            # for path in (self.dataset_root / 'images' / 'images').glob('*.png')
+            for path in (self.dataset_root / 'images' / 'images').glob('*.png')
         ]
 
-class PelviXNetProcessor(Default2DLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+class PelviXNetProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'PelviXNet'
 
     def get_image_files(self) -> Sequence[ImageFile]:
