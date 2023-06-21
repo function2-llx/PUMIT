@@ -11,7 +11,7 @@ import pandas as pd
 from tqdm.contrib.concurrent import process_map
 
 from monai import transforms as mt
-from monai.data import MetaTensor
+from monai.data import MetaTensor, PydicomReader
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('datasets-PUMT')
@@ -116,15 +116,17 @@ class DatasetProcessor(ABC):
         }
 
 class Default3DLoaderMixin:
+    reader = None
+
     def get_loader(self):
         return mt.Compose([
-            mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
+            mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
             mt.Orientation('RAS'),
             MetaTensor.contiguous,
         ])
 
 class Default2DLoaderMixin:
-    dummy_dim: int = 2
+    dummy_dim: int = 1  # it seems that most 2D medical images are taken in the coronal plane
     assert_gray_scale: bool = False
 
     def adapt_to_3d(self, img: MetaTensor):
@@ -162,6 +164,10 @@ class MinPercentileCropperMixin:
             return mask[None]
 
         return mt.CropForeground(select_fn)
+
+class NaturalImageCropperMixin(MinPercentileCropperMixin):
+    min_p = 0
+    exclude_min = False
 
 # a function f(n) that n*f(n)→1 (n→1), n*f(n)→2 (n→∞)
 def adaptive_weight(n: int):
@@ -271,8 +277,19 @@ class BCVAbdomenProcessor(BCVProcessor):
 class BCVCervixProcessor(BCVProcessor):
     name = 'BCV/Cervix'
 
-class ChákṣuProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class CGMHPelvisProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+    name = 'CGMH Pelvis'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'RGB/XR', path)
+            for path in (self.dataset_root / 'CGMH_PelvisSegment' / 'Image').glob('*.png')
+        ]
+
+class ChákṣuProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
     name = 'Chákṣu'
+    min_p = 0
+    exclude_min = False
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -323,9 +340,10 @@ class CrossMoDA2022Processor(Default3DLoaderMixin, MinPercentileCropperMixin, Da
                 ret.append(ImageFile(f'{key}', modality, path))
         return ret
 
-class CHASEDB1Processor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class CHASEDB1Processor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
     name = 'CHASE_DB1'
-    min_p = 0.
+    min_p = 0
+    exclude_min = False
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -333,15 +351,26 @@ class CHASEDB1Processor(Default2DLoaderMixin, MinPercentileCropperMixin, Dataset
             for i, side in it.product(range(1, 15), ('L', 'R'))
         ]
 
-class CHUACProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class CHUACProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
     name = 'CHUAC'
     min_p = 0
+    exclude_min = False
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
             ImageFile(str(i), 'RGB/fundus', self.dataset_root / 'Original' / f'{i}.png')
             for i in range(1, 31)
         ]
+
+class EPISURGProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'EPISURG'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        ret = []
+        for path in (self.dataset_root / 'subjects').rglob('*t1mri*'):
+            key = '_'.join(path.parts[-3:-1])
+            ret.append(ImageFile(key, 'MRI/T1', path))
+        return ret
 
 class FLARE22Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
     name = 'FLARE22'
@@ -384,9 +413,8 @@ def file_sha3(filepath: Path):
 
     return sha3_hash.hexdigest()
 
-class IDRiDProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+class IDRiDProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
     name = 'IDRiD'
-    min_p = 0
 
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
@@ -430,8 +458,8 @@ class IXIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProce
 
         return ret[:20]
 
-class KaggleRDCProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
-    name = 'kaggle-RDC'
+class KaggleRDCProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+    name = 'Kaggle-RDC'
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -441,6 +469,7 @@ class KaggleRDCProcessor(Default2DLoaderMixin, MinPercentileCropperMixin, Datase
 
 class LIDCIDRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
     name = 'LIDC-IDRI'
+    reader = PydicomReader
 
     @property
     def dataset_root(self):
@@ -524,6 +553,155 @@ class MSDSpleenProcessor(MSDProcessor):
 
 class MSDColonProcessor(MSDProcessor):
     name = 'MSD/Task10_Colon'
+
+class NIHChestXRayProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+    name = 'NIH Chest X-ray/CXR8'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'RGB/XR', path)
+            for path in (self.dataset_root / 'images' / 'images').glob('*.png')
+        ]
+
+class PelviXNetProcessor(Default2DLoaderMixin, NaturalImageCropperMixin, DatasetProcessor):
+    name = 'PelviXNet'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.name, 'RGB/XR', path)
+            for path in (self.dataset_root / 'pxr-150' / 'images_all').glob('*.png')
+        ]
+
+class PICAIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'PI-CAI'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        mapping = {
+            'adc': 'ADC',
+            'cor': 'T2',
+            't2w': 'T2',
+            'sag': 'T2',
+            'hbv': 'DWI',
+        }
+        return [
+            ImageFile(key := path.stem, mapping[key.rsplit('_', 1)[1]], path)
+            for path in (self.dataset_root / 'public_images').rglob('*.mha')
+        ]
+
+class Prostate158Processor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'Prostate158'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        mapping = {
+            'adc': 'ADC',
+            'dwi': 'DWI',
+            't2': 'T2',
+        }
+        return [
+            ImageFile(f'{case_dir.name}-{modality_suffix}', f'MRI/{modality}', case_dir / f'{modality_suffix}.nii.gz')
+            for case_dir in (self.dataset_root / 'prostate158_train' / 'train').iterdir()
+            for modality_suffix, modality in mapping.items()
+        ]
+
+class PROSTATEMRIProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    reader = 'pydicomreader'
+    name = 'PROSTATE-MRI/PROSTATE-MRI-5-18-2018-doiJNLP-dKJJAqnS'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        mapping = {
+            'DCE': 'T1c',
+            'SShDWI': 'DWI',
+            'dSShDWI': 'DWI',
+        }
+        ret = []
+        for path in (self.dataset_root / 'PROSTATE-MRI').glob('*/*/*'):
+            key_suffix, modality_string = path.name.split('-')[:2]
+            modality = modality_string.split(' ', 1)[0]
+            ret.append(ImageFile(
+                f'{path.parent.parent.name}_{key_suffix}',
+                f'MRI/{mapping.get(modality, modality)}',
+                path,
+            ))
+        return ret
+
+class RibFracProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'RibFrac'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        suffix = '-image.nii.gz'
+        return [
+            ImageFile(path.name[:-len(suffix)], 'CT', path)
+            for path in self.dataset_root.glob(f'*/*{suffix}')
+        ]
+
+class RSNA2020PEDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'RSNA-2020-PED'
+    reader = PydicomReader
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile('.'.join(path.parts[-2:]), 'CT', path)
+            for path in self.dataset_root.glob('*/*/*')
+        ]
+
+class RSNA2022CSFDProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'RSNA-2022-CSFD'
+    reader = PydicomReader
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.name, 'CT', path)
+            for split in ['train', 'test']
+            for path in (self.dataset_root / f'{split}_images').iterdir()
+        ]
+
+class STOICProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'STOIC'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'CT', path)
+            for path in (self.dataset_root / 'stoic2021-training' / 'data' / 'mha').glob('*.mha')
+        ]
+
+class TotalSegmentatorProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'TotalSegmentator'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(key, 'CT', path)
+            for path in (self.dataset_root / 'Totalsegmentator_dataset').glob('*/ct.nii.gz')
+            # this case seems to be corrupted
+            # https://github.com/wasserth/TotalSegmentator/issues/24#issuecomment-1298390124
+            if (key := path.parent.name) != 's0864'
+        ]
+
+class VerSeProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'VerSe'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.parent.name, 'CT', path)
+            for path in self.dataset_root.glob('*/rawdata/*/*.nii.gz')
+        ]
+
+class VSSEGProcessor(Default3DLoaderMixin, MinPercentileCropperMixin, DatasetProcessor):
+    name = 'Vestibular-Schwannoma-SEG/Vestibular-Schwannoma-SEG Feb 2021 manifest'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        ret = []
+        for path in (self.dataset_root / 'Vestibular-Schwannoma-SEG').glob('*/*/*'):
+            if '-' not in path.name:
+                continue
+            seq_name = path.name.split('-')[1]
+            if 't1' in seq_name:
+                modality = 'T1'
+            elif 't2' in seq_name:
+                modality = 'T2'
+            else:
+                raise ValueError
+            ret.append(ImageFile(f'{path.parent.parent.name}_{modality}', f'MRI/{modality}', path))
+        return ret
 
 def main():
     from argparse import ArgumentParser
