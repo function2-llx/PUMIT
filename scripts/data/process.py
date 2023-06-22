@@ -13,7 +13,6 @@ from tqdm.contrib.concurrent import process_map
 
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
-from monai.utils import ImageMetaKey
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('datasets-PUMT')
@@ -25,6 +24,7 @@ class ImageFile:
     modality: str | list[str]
     path: Path
     weight: float = 1
+    loader: Callable[[Path], MetaTensor] | None = None
 
 class DatasetProcessor(ABC):
     name: str
@@ -41,9 +41,9 @@ class DatasetProcessor(ABC):
     def get_image_files(self) -> Sequence[ImageFile]:
         pass
 
-    @abstractmethod
+    # default loader for all image files
     def get_loader(self) -> Callable[[Path], MetaTensor]:
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_cropper(self) -> Callable[[MetaTensor], MetaTensor]:
@@ -62,11 +62,12 @@ class DatasetProcessor(ABC):
     def process_file(
         self,
         file: ImageFile,
-        loader: Callable[[Path], MetaTensor] | None = None,
         cropper: Callable[[MetaTensor], MetaTensor] | None = None,
     ):
-        if loader is None:
+        if file.loader is None:
             loader = self.get_loader()
+        else:
+            loader = file.loader
         data = loader(file.path)
         if cropper is None:
             cropper = self.get_cropper()
@@ -120,7 +121,7 @@ class DatasetProcessor(ABC):
 class Default3DLoaderMixin:
     reader = None
 
-    def get_loader(self):
+    def get_loader(self) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
             mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
             mt.Orientation('RAS'),
@@ -130,6 +131,10 @@ class Default3DLoaderMixin:
 class NaturalImageLoaderMixin:
     dummy_dim: int = 1  # it seems that most 2D medical images are taken in the coronal plane
     assert_gray_scale: bool = False
+
+    def __init__(self, dummy_dim: int | None = None):
+        if dummy_dim is not None:
+            self.dummy_dim = dummy_dim
 
     def check_and_adapt_to_3d(self, img: MetaTensor):
         if img.shape[0] == 4:
@@ -142,11 +147,14 @@ class NaturalImageLoaderMixin:
         img.affine[self.dummy_dim, self.dummy_dim] = 1e8
         return img
 
-    def get_loader(self):
+    def get_loader(self) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
             mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
             self.check_and_adapt_to_3d,
         ])
+
+    def __call__(self, path: Path):
+        return self.get_loader()(path)
 
 class ValueBasedCropper(ABC):
     @abstractmethod
@@ -313,6 +321,30 @@ class ChákṣuProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetP
             for image_dir in self.dataset_root.glob('*/1.0_Original_Fundus_Images/*') if image_dir.is_dir()
             for path in image_dir.iterdir() if path.suffix.lower() in ['.png', '.jpg']
         ]
+
+class CheXpertProcessor(ConstantCropperMixin, DatasetProcessor):
+    name = 'CheXpert'
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'chexpertchestxrays-u20210408'
+    
+    def get_image_files(self) -> Sequence[ImageFile]:
+        ret = []
+        dummy_dim_mapping = {
+            'frontal': 1,
+            'lateral': 0,
+        }
+        for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
+            view = path.stem.split('_')[1]
+            ret.append(ImageFile(
+                '-'.join([*path.parts[-3:-1], path.stem]),
+                'RGB/XR',
+                path,
+                loader=NaturalImageLoaderMixin(dummy_dim_mapping[view]),
+            ))
+
+        return ret
 
 class CHAOSProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'CHAOS'
