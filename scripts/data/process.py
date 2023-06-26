@@ -3,6 +3,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import hashlib
 import itertools as it
+from functools import cached_property
 from pathlib import Path
 
 import cytoolz
@@ -468,7 +469,13 @@ class HaNSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProce
                 ret.append(ImageFile(f'{key}-{modality_suffix}', modality, case_dir / f'{key}_IMG_{modality_suffix}.nrrd'))
         return ret
 
-class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+class TCIAProcessor(DatasetProcessor, ABC):
+    @cached_property
+    def tcia_meta(self):
+        meta = pd.read_csv(self.dataset_root / 'metadata.csv')
+        return meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+
+class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor):
     name = 'HNSCC'
     reader = PydicomReader
 
@@ -477,8 +484,9 @@ class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProces
         return DATASETS_ROOT / self.name / 'HNSCC'
 
     def get_image_files(self) -> Sequence[ImageFile]:
-        meta = pd.read_csv(self.dataset_root / 'metadata.csv')
-        meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+        meta = self.tcia_meta
+        # meta = pd.read_csv(self.dataset_root / 'metadata.csv')
+        # meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
         ret = []
         # these are strange series
         ignore_sids = {
@@ -663,7 +671,7 @@ class MSDSpleenProcessor(MSDProcessor):
 class MSDColonProcessor(MSDProcessor):
     name = 'MSD/Task10_Colon'
 
-class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor):
     name = 'NCTCT'
     reader = PydicomReader
 
@@ -672,8 +680,7 @@ class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProces
         return DATASETS_ROOT / self.name / 'TCIA_CT_COLONOGRAPHY_06-22-2015'
 
     def get_image_files(self) -> Sequence[ImageFile]:
-        meta = pd.read_csv(self.dataset_root / 'metadata.csv')
-        meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+        meta = self.tcia_meta
         return [
             ImageFile(sid, 'CT', self.dataset_root / path)
             for sid, (num, path) in meta[['Number of Images', 'File Location']].iterrows()
@@ -734,7 +741,32 @@ class Prostate158Processor(Default3DLoaderMixin, PercentileCropperMixin, Dataset
             for modality_suffix, modality in mapping.items()
         ]
 
-class PROSTATEMRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+class ProstateDiagnosisProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor):
+    name = 'PROSTATE-DIAGNOSIS'
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'TCIA_PROSTATE-DIAGNOSIS_06-22-2015'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        meta = self.tcia_meta
+        ignore = {'AX BLISSGAD8', 'AX BLISSGAD', 'dynTHRIVE'}
+        ret = []
+        for sid, (desc, path) in meta[['Series Description', 'File Location']].iterrows():
+            if desc in ignore:
+                continue
+            if 'T2' in desc:
+                modality = 'T2'
+            elif 'GAD' in desc or desc == 'T1WTSEAXGd':
+                modality = 'T1c'
+            elif 'T1' in desc:
+                modality = 'T1'
+            else:
+                raise ValueError
+            ret.append(ImageFile(sid, f'MRI/{modality}', self.dataset_root / path))
+        return ret
+
+class ProstateMRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'PROSTATE-MRI'
     reader = PydicomReader
 
