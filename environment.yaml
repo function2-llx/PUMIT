@@ -19,6 +19,7 @@ dependencies:
   - wandb
   - pandas
   - scipy
+  - matplotlib
   - openpyxl
   - nibabel
   - itk

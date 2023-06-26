@@ -53,11 +53,22 @@ class DatasetProcessor(ABC):
         files = self.get_image_files()
         if len(files) == 0:
             return
-        (self.output_root / 'data').mkdir(parents=True)
-        results = process_map(self.process_file, files, max_workers=max_workers, ncols=ncols, **kwargs)
-        pd.DataFrame.from_records(
-            cytoolz.concat(results), index='key'
-        ).to_excel(self.output_root / 'images-meta.xlsx', freeze_panes=(1, 1))
+        if (images_meta_path := self.output_root / 'images-meta.xlsx').exists():
+            images_meta = pd.read_excel(images_meta_path, index_col='key')
+            remained_mask = images_meta['modality'].isna()
+            remained_keys = images_meta.index[remained_mask]
+            old_meta = images_meta[~remained_mask]
+            files = [file for file in files if file.key in remained_keys]
+            print('continue!')
+        else:
+            old_meta = pd.DataFrame()
+            (self.output_root / 'data').mkdir(parents=True)
+        if len(files) == 0:
+            remained_meta = pd.DataFrame()
+        else:
+            results = process_map(self.process_file, files, max_workers=max_workers, ncols=ncols, **kwargs)
+            remained_meta = pd.DataFrame.from_records(cytoolz.concat(results), index='key')
+        pd.concat([old_meta, remained_meta]).to_excel(images_meta_path, freeze_panes=(1, 1))
 
     def process_file(
         self,
@@ -68,7 +79,12 @@ class DatasetProcessor(ABC):
             loader = self.get_loader()
         else:
             loader = file.loader
-        data = loader(file.path)
+        try:
+            data = loader(file.path)
+        except Exception:
+            print(file.path)
+            return [{'key': file.key, 'origin': file.path}]
+
         if cropper is None:
             cropper = self.get_cropper()
         ret = self.process_file_data(file, data, cropper)
@@ -163,7 +179,7 @@ class ValueBasedCropper(ABC):
 
     def get_cropper(self):
         def select_fn(img: MetaTensor):
-            v = torch.tensor(self.get_crop_value(img))
+            v = torch.as_tensor(self.get_crop_value(img))
             if v.numel() != 1:
                 assert v.ndim == 1 and v.shape[0] == img.shape[0]
                 for _ in range(img.ndim - 1):
@@ -452,6 +468,49 @@ class HaNSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProce
                 ret.append(ImageFile(f'{key}-{modality_suffix}', modality, case_dir / f'{key}_IMG_{modality_suffix}.nrrd'))
         return ret
 
+class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    name = 'HNSCC'
+    reader = PydicomReader
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'HNSCC'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        meta = pd.read_csv(self.dataset_root / 'metadata.csv')
+        meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+        ret = []
+        # these are strange series
+        ignore_sids = {
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.204861137296365813191219519295',
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.126694397784217103845514279404',
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.128464676098500286122976392857',
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.167120054523886306987571801649',
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.245936214162991561897245946126',
+            '1.3.6.1.4.1.14519.5.2.1.1706.8040.275430449343962751502690968943',
+        }
+        for sid, (num, modality, path) in meta[['Number of Images', 'Modality', 'File Location']].iterrows():
+            path = self.dataset_root / path
+            if num <= 2 or modality not in ['CT', 'MR'] or 'loc' in path.name.lower():
+                continue
+            if sid in ignore_sids:
+                continue
+            if modality == 'MR':
+                desc = meta.at[sid, 'Series Description']
+                if desc == '3D XRT VOL':
+                    continue
+                if 'T1 C' in desc or 'POST' in desc:
+                    modality = 'T1'
+                elif 'T1' in desc:
+                    modality = 'T1'
+                elif 'T2' in desc:
+                    modality = 'T2'
+                else:
+                    raise ValueError(desc)
+                modality = f'MRI/{modality}'
+            ret.append(ImageFile(sid, modality, path))
+        return ret
+
 def file_sha3(filepath: Path):
     sha3_hash = hashlib.sha3_256()
 
@@ -486,7 +545,9 @@ class IXIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcesso
             ImageFile(path.name[:-len(suffix)], f'MRI/{modality}', path)
             for modality in ['T1', 'T2', 'PD', 'MRA']
             for path in (self.dataset_root / f'IXI-{modality}').glob(f'*{suffix}')
-        ][:10]
+            # incomplete file
+            if path.name != 'IXI371-IOP-0970-MRA.nii.gz'
+        ]
         dti_groups: dict[str, list[tuple[int, Path]]] = {}
         for path in (self.dataset_root / 'IXI-DTI').glob(f'*{suffix}'):
             group, idx = path.name[:-len(suffix)].rsplit('-', 1)
@@ -504,7 +565,7 @@ class IXIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcesso
                 for i, path in items
             ])
 
-        return ret[:20]
+        return ret
 
 class KaggleRDCProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'Kaggle-RDC'
@@ -602,6 +663,23 @@ class MSDSpleenProcessor(MSDProcessor):
 class MSDColonProcessor(MSDProcessor):
     name = 'MSD/Task10_Colon'
 
+class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    name = 'NCTCT'
+    reader = PydicomReader
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'TCIA_CT_COLONOGRAPHY_06-22-2015'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        meta = pd.read_csv(self.dataset_root / 'metadata.csv')
+        meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+        return [
+            ImageFile(sid, 'CT', self.dataset_root / path)
+            for sid, (num, path) in meta[['Number of Images', 'File Location']].iterrows()
+            if num >= 81
+        ]
+
 class NIHChestXRayProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'NIH Chest X-ray'
     assert_gray_scale = True
@@ -657,8 +735,8 @@ class Prostate158Processor(Default3DLoaderMixin, PercentileCropperMixin, Dataset
         ]
 
 class PROSTATEMRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
-    reader = 'pydicomreader'
     name = 'PROSTATE-MRI'
+    reader = PydicomReader
 
     @property
     def dataset_root(self):
@@ -744,6 +822,7 @@ class VerSeProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProces
 
 class VSSEGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'Vestibular-Schwannoma-SEG'
+    reader = PydicomReader
 
     @property
     def dataset_root(self):
