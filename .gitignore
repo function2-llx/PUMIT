@@ -157,3 +157,5 @@ datasets
 datasets-PUMT
 .run
 .vscode/
+pre-trained
+*.nii.gz
