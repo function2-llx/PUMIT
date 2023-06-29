@@ -10,11 +10,18 @@ from monai.config import PathLike
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
 class VectorQuantizer(nn.Module):
-    def __init__(self, n_e: int, e_dim: int, beta: float, remap: PathLike | None = None, unknown_index: str = "random",
-                 sane_index_shape: bool = False):
+    def __init__(
+        self,
+        num_embeddings: int,
+        embed_dim: int,
+        beta: float,
+        remap: PathLike | None = None,
+        unknown_index: str = "random",
+        sane_index_shape: bool = False,
+    ):
         super().__init__()
-        self.n_e = n_e
-        self.e_dim = e_dim
+        self.n_e = num_embeddings
+        self.e_dim = embed_dim
         self.beta = beta
 
         self.embedding = nn.Embedding(self.n_e, self.e_dim)
@@ -32,7 +39,7 @@ class VectorQuantizer(nn.Module):
             print(f"Remapping {self.n_e} indices to {self.re_embed} indices. "
                   f"Using {self.unknown_index} for unknown indices.")
         else:
-            self.re_embed = n_e
+            self.re_embed = num_embeddings
 
         self.sane_index_shape = sane_index_shape
 
@@ -74,13 +81,7 @@ class VectorQuantizer(nn.Module):
         perplexity = None
         min_encodings = None
 
-        # compute loss for embedding
-        if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
-        else:
-            loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
+        loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * torch.mean((z_q - z.detach()) ** 2)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()

@@ -1,13 +1,18 @@
 from collections import OrderedDict
 from collections.abc import Sequence
+import itertools as it
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from luolib.models.adaptive_resampling import AdaptiveDownsample, AdaptiveUpsample
+from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
+from luolib.utils import PathLike
 
+from .quantize import VectorQuantizer
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
@@ -32,15 +37,15 @@ class ResnetBlock(nn.Module):
         self.use_conv_shortcut = conv_shortcut
 
         self.norm1 = get_norm_layer(in_channels)
-        self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv1 = InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = get_norm_layer(out_channels)
         self.dropout = nn.Dropout(dropout)
-        self.conv2 = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = InflatableConv3d(out_channels, out_channels, kernel_size=3, padding=1)
         if in_channels != out_channels:
             if self.use_conv_shortcut:
-                self.conv_shortcut = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
+                self.conv_shortcut = InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
             else:
-                self.nin_shortcut = nn.Conv3d(in_channels, out_channels, kernel_size=1)
+                self.nin_shortcut = InflatableConv3d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor):
         h = x
@@ -66,10 +71,10 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.norm = get_norm_layer(in_channels)
-        self.q = nn.Conv3d(in_channels, in_channels, kernel_size=1)
-        self.k = nn.Conv3d(in_channels, in_channels, kernel_size=1)
-        self.v = nn.Conv3d(in_channels, in_channels, kernel_size=1)
-        self.proj_out = nn.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.q = InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.k = InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.v = InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.proj_out = InflatableConv3d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor):
         h_ = x
@@ -146,7 +151,7 @@ class Encoder(nn.Module):
         num_layers = len(layer_channels)
 
         # downsampling
-        self.conv_in = nn.Conv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
+        self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
         self.down = nn.ModuleList([
             EncoderDownLayer(
                 layer_channels[0] if i == 0 else layer_channels[i - 1],
@@ -170,9 +175,9 @@ class Encoder(nn.Module):
 
         # end
         self.norm_out = get_norm_layer(last_channels)
-        self.conv_out = nn.Conv3d(last_channels, z_channels, kernel_size=3, padding=1)
+        self.conv_out = InflatableConv3d(last_channels, z_channels, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, spacing: torch.Tensor):
+    def forward(self, x: torch.Tensor, spacing: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
         x = self.conv_in(x)
         downsample_masks = []
         for down in self.down:
@@ -195,6 +200,7 @@ class DecoderUpLayer(nn.Module):
         upsample: bool,
     ):
         super().__init__()
+        num_res_blocks += 1  # following VQGAN
         self.block = nn.ModuleList([
             ResnetBlock(in_channels if i == 0 else out_channels, out_channels)
             for i in range(num_res_blocks)
@@ -225,14 +231,14 @@ class Decoder(nn.Module):
         layer_channels: Sequence[int],
         num_res_blocks: int,
         z_channels: int,
-        dropout=0.0,
+        dropout: float = 0.0,
     ):
         super().__init__()
         num_layers = len(layer_channels)
         last_channels = layer_channels[-1]
 
         # z to last feature map channels
-        self.conv_in = nn.Conv3d(z_channels, last_channels, kernel_size=3, padding=1)
+        self.conv_in = InflatableConv3d(z_channels, last_channels, kernel_size=3, padding=1)
 
         # middle
         self.mid = nn.Sequential(OrderedDict(
@@ -256,9 +262,9 @@ class Decoder(nn.Module):
         # end
         first_channels = layer_channels[0]
         self.norm_out = get_norm_layer(first_channels)
-        self.conv_out = nn.Conv3d(first_channels, out_channels, kernel_size=3, padding=1)
+        self.conv_out = InflatableOutputConv3d(first_channels, out_channels, kernel_size=3, padding=1)
 
-    def forward(self, z: torch.Tensor, upsample_masks: torch.Tensor):
+    def forward(self, z: torch.Tensor, upsample_masks: list[torch.Tensor]):
         # convert z to last feature map channels
         x = self.conv_in(z)
 
@@ -276,116 +282,106 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-# class VQModel(pl.LightningModule):
-#     def __init__(self,
-#                  ddconfig,
-#                  lossconfig,
-#                  n_embed,
-#                  embed_dim,
-#                  ckpt_path=None,
-#                  ignore_keys=[],
-#                  image_key="image",
-#                  colorize_nlabels=None,
-#                  monitor=None,
-#                  batch_resize_range=None,
-#                  scheduler_config=None,
-#                  lr_g_factor=1.0,
-#                  remap=None,
-#                  sane_index_shape=False,  # tell vector quantizer to return indices as bhw
-#                  use_ema=False
-#                  ):
-#         super().__init__()
-#         self.embed_dim = embed_dim
-#         self.n_embed = n_embed
-#         self.image_key = image_key
-#         self.encoder = Encoder(**ddconfig)
-#         self.decoder = Decoder(**ddconfig)
-#         self.loss = instantiate_from_config(lossconfig)
-#         self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25,
-#                                         remap=remap,
-#                                         sane_index_shape=sane_index_shape)
-#         self.quant_conv = nn.Conv3d(ddconfig["z_channels"], embed_dim, 1)
-#         self.post_quant_conv = nn.Conv3d(embed_dim, ddconfig["z_channels"], 1)
-#         if colorize_nlabels is not None:
-#             assert type(colorize_nlabels) == int
-#             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
-#         if monitor is not None:
-#             self.monitor = monitor
-#         self.batch_resize_range = batch_resize_range
-#         if self.batch_resize_range is not None:
-#             print(f"{self.__class__.__name__}: Using per-batch resizing in range {batch_resize_range}.")
-#
-#         self.use_ema = use_ema
-#         if self.use_ema:
-#             self.model_ema = LitEma(self)
-#             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-#
-#         if ckpt_path is not None:
-#             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-#         self.scheduler_config = scheduler_config
-#         self.lr_g_factor = lr_g_factor
-#
-#     @contextmanager
-#     def ema_scope(self, context=None):
-#         if self.use_ema:
-#             self.model_ema.store(self.parameters())
-#             self.model_ema.copy_to(self)
-#             if context is not None:
-#                 print(f"{context}: Switched to EMA weights")
-#         try:
-#             yield None
-#         finally:
-#             if self.use_ema:
-#                 self.model_ema.restore(self.parameters())
-#                 if context is not None:
-#                     print(f"{context}: Restored training weights")
-#
-#     def init_from_ckpt(self, path, ignore_keys=list()):
-#         sd = torch.load(path, map_location="cpu")["state_dict"]
-#         keys = list(sd.keys())
-#         for k in keys:
-#             for ik in ignore_keys:
-#                 if k.startswith(ik):
-#                     print("Deleting key {} from state_dict.".format(k))
-#                     del sd[k]
-#         missing, unexpected = self.load_state_dict(sd, strict=False)
-#         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
-#         if len(missing) > 0:
-#             print(f"Missing Keys: {missing}")
-#             print(f"Unexpected Keys: {unexpected}")
-#
-#     def on_train_batch_end(self, *args, **kwargs):
-#         if self.use_ema:
-#             self.model_ema(self)
-#
-#     def encode(self, x):
-#         h = self.encoder(x)
-#         h = self.quant_conv(h)
-#         quant, emb_loss, info = self.quantize(h)
-#         return quant, emb_loss, info
-#
-#     def encode_to_prequant(self, x):
-#         h = self.encoder(x)
-#         h = self.quant_conv(h)
-#         return h
-#
-#     def decode(self, quant):
-#         quant = self.post_quant_conv(quant)
-#         dec = self.decoder(quant)
-#         return dec
-#
-#     def decode_code(self, code_b):
-#         quant_b = self.quantize.embed_code(code_b)
-#         dec = self.decode(quant_b)
-#         return dec
-#
-#     def forward(self, input, return_pred_indices=False):
-#         quant, diff, (_, _, ind) = self.encode(input)
-#         dec = self.decode(quant)
-#         if return_pred_indices:
-#             return dec, diff, ind
-#         return dec, diff
-#
+class VQModel(pl.LightningModule):
+    def __init__(
+        self,
+        in_channels: int,
+        layer_channels: Sequence[int],
+        num_res_blocks: int,
+        z_channels: int,
+        # lossconfig,
+        num_embeddings: int,
+        embed_dim: int,
+        # ckpt_path=None,
+        dropout: float = 0.,
+        remap: PathLike | None = None,
+        sane_index_shape: bool = False,  # tell vector quantizer to return indices as bhw
+        gradient_checkpointing: bool = False,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.n_embed = num_embeddings
+        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout)
+        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout)
+        self.quantize = VectorQuantizer(num_embeddings, embed_dim, beta=0.25, remap=remap, sane_index_shape=sane_index_shape)
+        self.quant_conv = InflatableConv3d(z_channels, embed_dim, 1)
+        self.post_quant_conv = InflatableConv3d(embed_dim, z_channels, 1)
+        # self.loss = instantiate_from_config(lossconfig)
+
+        # self.scheduler_config = scheduler_config
+        # self.lr_g_factor = lr_g_factor
+        self.gradient_checkpointing = gradient_checkpointing
+
+    #     @contextmanager
+    #     def ema_scope(self, context=None):
+    #         if self.use_ema:
+    #             self.model_ema.store(self.parameters())
+    #             self.model_ema.copy_to(self)
+    #             if context is not None:
+    #                 print(f"{context}: Switched to EMA weights")
+    #         try:
+    #             yield None
+    #         finally:
+    #             if self.use_ema:
+    #                 self.model_ema.restore(self.parameters())
+    #                 if context is not None:
+    #                     print(f"{context}: Restored training weights")
+    #
+    #     def init_from_ckpt(self, path, ignore_keys=list()):
+    #         sd = torch.load(path, map_location="cpu")["state_dict"]
+    #         keys = list(sd.keys())
+    #         for k in keys:
+    #             for ik in ignore_keys:
+    #                 if k.startswith(ik):
+    #                     print("Deleting key {} from state_dict.".format(k))
+    #                     del sd[k]
+    #         missing, unexpected = self.load_state_dict(sd, strict=False)
+    #         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
+    #         if len(missing) > 0:
+    #             print(f"Missing Keys: {missing}")
+    #             print(f"Unexpected Keys: {unexpected}")
+    #
+    #     def on_train_batch_end(self, *args, **kwargs):
+    #         if self.use_ema:
+    #             self.model_ema(self)
+    #
+    def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
+        if spacing is None:
+            spacing = x.new_ones(x.shape[0], 3)
+        if self.training and self.gradient_checkpointing:
+            h, spacing, downsample_masks = checkpoint(self.encoder, x, spacing)
+        else:
+            h, spacing, downsample_masks = self.encoder.forward(x, spacing)
+        h = self.quant_conv(h)
+        quant, emb_loss, info = self.quantize.forward(h)
+        return quant, downsample_masks, emb_loss, info
+
+    #
+    #     def encode_to_prequant(self, x):
+    #         h = self.encoder(x)
+    #         h = self.quant_conv(h)
+    #         return h
+
+    def decode(self, quant: torch.Tensor, upsample_masks: list[torch.Tensor]):
+        quant = self.post_quant_conv(quant)
+        if self.training and self.gradient_checkpointing:
+            dec = checkpoint(self.decoder, quant, upsample_masks)
+        else:
+            dec = self.decoder.forward(quant, upsample_masks)
+        return dec
+
+    #     def decode_code(self, code_b):
+    #         quant_b = self.quantize.embed_code(code_b)
+    #         dec = self.decode(quant_b)
+    #         return dec
+
+    def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None, return_pred_indices: bool = False):
+        quant, downsample_masks, diff, (_, _, ind) = self.encode(x, spacing)
+        dec = self.decode(quant, downsample_masks)
+        if return_pred_indices:
+            return dec, diff, ind
+        return dec, diff
+
 #     def get_input(self, batch, k):
 #         x = batch[k]
 #         if len(x.shape) == 3:
