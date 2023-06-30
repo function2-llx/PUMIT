@@ -2,6 +2,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 import itertools as it
 
+import cytoolz
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -111,6 +112,7 @@ class EncoderDownLayer(nn.Module):
         num_res_blocks: int,
         use_attn: bool,
         downsample: bool,
+        gradient_checkpointing: bool,
     ):
         super().__init__()
         self.block = nn.ModuleList([
@@ -126,10 +128,15 @@ class EncoderDownLayer(nn.Module):
         else:
             self.register_module('downsample', None)
 
+        self.gradient_checkpointing = gradient_checkpointing
+
     def forward(self, x: torch.Tensor, spacing: torch.Tensor):
         for block, attn in zip(self.block, self.attn):
-            x = block(x)
-            x = attn(x)
+            if self.training and self.gradient_checkpointing:
+                x = checkpoint(cytoolz.compose(attn, block), x)
+            else:
+                x = block(x)
+                x = attn(x)
         if self.downsample is not None:
             x, spacing, downsample_mask = self.downsample.forward(x, spacing)
         else:
@@ -146,6 +153,7 @@ class Encoder(nn.Module):
         num_res_blocks: int,
         z_channels: int,
         dropout: float = 0.,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         num_layers = len(layer_channels)
@@ -161,6 +169,7 @@ class Encoder(nn.Module):
                 # in the original implementation, they apply attention when the resolution reaches 16 (from 256)
                 use_attn=i >= 4,
                 downsample=i != num_layers - 1,
+                gradient_checkpointing=gradient_checkpointing,
             )
             for i in range(num_layers)
         ])
@@ -198,6 +207,7 @@ class DecoderUpLayer(nn.Module):
         num_res_blocks: int,
         use_attn: bool,
         upsample: bool,
+        gradient_checkpointing: bool,
     ):
         super().__init__()
         num_res_blocks += 1  # following VQGAN
@@ -214,10 +224,15 @@ class DecoderUpLayer(nn.Module):
         else:
             self.register_module('upsample', None)
 
-    def forward(self, x: torch.Tensor, upsample_mask: torch.Tensor | None = None):
+        self.gradient_checkpointing = gradient_checkpointing
+
+    def forward(self, x: torch.Tensor, upsample_mask: torch.Tensor):
         for block, attn in zip(self.block, self.attn):
-            x = block(x)
-            x = attn(x)
+            if self.training and self.gradient_checkpointing:
+                x = checkpoint(cytoolz.compose(attn, block), x)
+            else:
+                x = block(x)
+                x = attn(x)
         if self.upsample is not None:
             x = self.upsample.forward(x, upsample_mask)
         return x
@@ -232,6 +247,7 @@ class Decoder(nn.Module):
         num_res_blocks: int,
         z_channels: int,
         dropout: float = 0.0,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
         num_layers = len(layer_channels)
@@ -255,6 +271,7 @@ class Decoder(nn.Module):
                 num_res_blocks,
                 use_attn=i >= 4,
                 upsample=i != 0,
+                gradient_checkpointing=gradient_checkpointing,
             )
             for i in range(num_layers)
         ])
@@ -272,9 +289,8 @@ class Decoder(nn.Module):
         x = self.mid(x)
 
         # upsampling
-        for up, upsample_mask in zip(reversed(self.up), reversed(upsample_masks[:-1])):
+        for up, upsample_mask in zip(reversed(self.up), reversed([torch.empty(0)] + upsample_masks[:-1])):
             x = up.forward(x, upsample_mask)
-        x = self.up[0](x)
 
         # end
         x = self.norm_out(x)
@@ -301,8 +317,8 @@ class VQModel(pl.LightningModule):
         super().__init__()
         self.embed_dim = embed_dim
         self.n_embed = num_embeddings
-        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout)
-        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout)
+        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout, gradient_checkpointing)
+        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout, gradient_checkpointing)
         self.quantize = VectorQuantizer(num_embeddings, embed_dim, beta=0.25, remap=remap, sane_index_shape=sane_index_shape)
         self.quant_conv = InflatableConv3d(z_channels, embed_dim, 1)
         self.post_quant_conv = InflatableConv3d(embed_dim, z_channels, 1)
@@ -310,7 +326,6 @@ class VQModel(pl.LightningModule):
 
         # self.scheduler_config = scheduler_config
         # self.lr_g_factor = lr_g_factor
-        self.gradient_checkpointing = gradient_checkpointing
 
     #     @contextmanager
     #     def ema_scope(self, context=None):
@@ -344,19 +359,15 @@ class VQModel(pl.LightningModule):
     #     def on_train_batch_end(self, *args, **kwargs):
     #         if self.use_ema:
     #             self.model_ema(self)
-    #
+
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
             spacing = x.new_ones(x.shape[0], 3)
-        if self.training and self.gradient_checkpointing:
-            h, spacing, downsample_masks = checkpoint(self.encoder, x, spacing)
-        else:
-            h, spacing, downsample_masks = self.encoder.forward(x, spacing)
+        h, spacing, downsample_masks = self.encoder.forward(x, spacing)
         h = self.quant_conv(h)
         quant, emb_loss, info = self.quantize.forward(h)
         return quant, downsample_masks, emb_loss, info
 
-    #
     #     def encode_to_prequant(self, x):
     #         h = self.encoder(x)
     #         h = self.quant_conv(h)
@@ -364,10 +375,7 @@ class VQModel(pl.LightningModule):
 
     def decode(self, quant: torch.Tensor, upsample_masks: list[torch.Tensor]):
         quant = self.post_quant_conv(quant)
-        if self.training and self.gradient_checkpointing:
-            dec = checkpoint(self.decoder, quant, upsample_masks)
-        else:
-            dec = self.decoder.forward(quant, upsample_masks)
+        dec = self.decoder.forward(quant, upsample_masks)
         return dec
 
     #     def decode_code(self, code_b):
