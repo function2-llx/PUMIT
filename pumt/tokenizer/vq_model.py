@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from collections.abc import Sequence
-import itertools as it
+from typing import Literal
 
 import cytoolz
 import numpy as np
@@ -11,9 +11,8 @@ from torch.utils.checkpoint import checkpoint
 
 from luolib.models.adaptive_resampling import AdaptiveDownsample, AdaptiveUpsample
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
-from luolib.utils import PathLike
 
-from .quantize import VectorQuantizer
+from .quantize import VectorQuantizer, VectorQuantizerOutput
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
@@ -114,6 +113,7 @@ class EncoderDownLayer(nn.Module):
         downsample: bool,
         gradient_checkpointing: bool,
     ):
+        # use_attn = False
         super().__init__()
         self.block = nn.ModuleList([
             ResnetBlock(in_channels if i == 0 else out_channels, out_channels)
@@ -152,6 +152,7 @@ class Encoder(nn.Module):
         layer_channels: Sequence[int],
         num_res_blocks: int,
         z_channels: int,
+        attn_layers: list[int],
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
     ):
@@ -167,7 +168,7 @@ class Encoder(nn.Module):
                 num_res_blocks,
                 # apply attention when stride >= 16
                 # in the original implementation, they apply attention when the resolution reaches 16 (from 256)
-                use_attn=i >= 4,
+                use_attn=i in attn_layers,
                 downsample=i != num_layers - 1,
                 gradient_checkpointing=gradient_checkpointing,
             )
@@ -246,6 +247,7 @@ class Decoder(nn.Module):
         layer_channels: Sequence[int],
         num_res_blocks: int,
         z_channels: int,
+        attn_layers: list[int],
         dropout: float = 0.0,
         gradient_checkpointing: bool = False,
     ):
@@ -269,7 +271,7 @@ class Decoder(nn.Module):
                 layer_channels[i + 1] if i + 1 < num_layers else layer_channels[-1],
                 layer_channels[i],
                 num_res_blocks,
-                use_attn=i >= 4,
+                use_attn=i in attn_layers,
                 upsample=i != 0,
                 gradient_checkpointing=gradient_checkpointing,
             )
@@ -305,90 +307,44 @@ class VQModel(pl.LightningModule):
         layer_channels: Sequence[int],
         num_res_blocks: int,
         z_channels: int,
+        attn_layers: list[int],
         # lossconfig,
         num_embeddings: int,
         embed_dim: int,
-        # ckpt_path=None,
+        mode: Literal['nearst', 'gumbel', 'soft'],
+        commitment_loss_beta: float = 0.25,
         dropout: float = 0.,
-        remap: PathLike | None = None,
-        sane_index_shape: bool = False,  # tell vector quantizer to return indices as bhw
         gradient_checkpointing: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.n_embed = num_embeddings
-        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout, gradient_checkpointing)
-        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, dropout, gradient_checkpointing)
-        self.quantize = VectorQuantizer(num_embeddings, embed_dim, beta=0.25, remap=remap, sane_index_shape=sane_index_shape)
+        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, dropout, gradient_checkpointing)
+        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, dropout, gradient_checkpointing)
+        self.quantize = VectorQuantizer(num_embeddings, embed_dim, mode, commitment_loss_beta)
         self.quant_conv = InflatableConv3d(z_channels, embed_dim, 1)
         self.post_quant_conv = InflatableConv3d(embed_dim, z_channels, 1)
         # self.loss = instantiate_from_config(lossconfig)
-
         # self.scheduler_config = scheduler_config
         # self.lr_g_factor = lr_g_factor
-
-    #     @contextmanager
-    #     def ema_scope(self, context=None):
-    #         if self.use_ema:
-    #             self.model_ema.store(self.parameters())
-    #             self.model_ema.copy_to(self)
-    #             if context is not None:
-    #                 print(f"{context}: Switched to EMA weights")
-    #         try:
-    #             yield None
-    #         finally:
-    #             if self.use_ema:
-    #                 self.model_ema.restore(self.parameters())
-    #                 if context is not None:
-    #                     print(f"{context}: Restored training weights")
-    #
-    #     def init_from_ckpt(self, path, ignore_keys=list()):
-    #         sd = torch.load(path, map_location="cpu")["state_dict"]
-    #         keys = list(sd.keys())
-    #         for k in keys:
-    #             for ik in ignore_keys:
-    #                 if k.startswith(ik):
-    #                     print("Deleting key {} from state_dict.".format(k))
-    #                     del sd[k]
-    #         missing, unexpected = self.load_state_dict(sd, strict=False)
-    #         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
-    #         if len(missing) > 0:
-    #             print(f"Missing Keys: {missing}")
-    #             print(f"Unexpected Keys: {unexpected}")
-    #
-    #     def on_train_batch_end(self, *args, **kwargs):
-    #         if self.use_ema:
-    #             self.model_ema(self)
 
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
             spacing = x.new_ones(x.shape[0], 3)
-        h, spacing, downsample_masks = self.encoder.forward(x, spacing)
-        h = self.quant_conv(h)
-        quant, emb_loss, info = self.quantize.forward(h)
-        return quant, downsample_masks, emb_loss, info
+        z, spacing, downsample_masks = self.encoder.forward(x, spacing)
+        z = self.quant_conv(z)
+        quant_out = self.quantize.forward(z)
+        return quant_out, downsample_masks
 
-    #     def encode_to_prequant(self, x):
-    #         h = self.encoder(x)
-    #         h = self.quant_conv(h)
-    #         return h
+    def decode(self, z_q: torch.Tensor, upsample_masks: list[torch.Tensor]):
+        z_q = self.post_quant_conv(z_q)
+        x_dec = self.decoder.forward(z_q, upsample_masks)
+        return x_dec
 
-    def decode(self, quant: torch.Tensor, upsample_masks: list[torch.Tensor]):
-        quant = self.post_quant_conv(quant)
-        dec = self.decoder.forward(quant, upsample_masks)
-        return dec
-
-    #     def decode_code(self, code_b):
-    #         quant_b = self.quantize.embed_code(code_b)
-    #         dec = self.decode(quant_b)
-    #         return dec
-
-    def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None, return_pred_indices: bool = False):
-        quant, downsample_masks, diff, (_, _, ind) = self.encode(x, spacing)
-        dec = self.decode(quant, downsample_masks)
-        if return_pred_indices:
-            return dec, diff, ind
-        return dec, diff
+    def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
+        quant_out, downsample_masks = self.encode(x, spacing)
+        x_dec = self.decode(quant_out.z_q, downsample_masks)
+        return x_dec, quant_out
 
 #     def get_input(self, batch, k):
 #         x = batch[k]
