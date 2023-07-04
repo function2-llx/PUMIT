@@ -40,6 +40,8 @@ def main():
     ])
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
+    from torch.nn import functional as nnf
+    # x = nnf.interpolate(x, scale_factor=(1, 0.5, 0.5), mode='trilinear')
     print(x.shape)
     conf = OmegaConf.load(args.conf_path)
     model: VQModel = instantiate_from_conf(conf).cuda().eval()
@@ -47,6 +49,8 @@ def main():
     spacing = torch.tensor([[1e6, 1, 1]], device='cuda')
     with torch.no_grad():
         dec, quant_out = model.forward(x, spacing)
+    print('output shape:', dec.shape)
+    dec = nnf.interpolate(dec, size=(1, 512, 512), mode='trilinear')
     print(dec.shape, quant_out.loss, quant_out.index.shape)
     save_image((dec[0, :, 0] + 1) / 2, args.out_path)
 

@@ -17,7 +17,7 @@ from .quantize import VectorQuantizer, VectorQuantizerOutput
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
 
-def nonlinearity(x: torch.Tensor):
+def act_layer(x: torch.Tensor):
     # swish
     return x * torch.sigmoid(x)
 
@@ -47,14 +47,23 @@ class ResnetBlock(nn.Module):
             else:
                 self.nin_shortcut = InflatableConv3d(in_channels, out_channels, kernel_size=1)
 
+    def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
+        if len(state_dict) == 0:
+            # thank you,<s> USA </s>residual connection
+            for name in ['conv1', 'conv2']:
+                conv: InflatableConv3d = getattr(self, name)
+                state_dict[f'{prefix}{name}.weight'] = torch.zeros_like(conv.weight)
+                state_dict[f'{prefix}{name}.bias'] = torch.zeros_like(conv.bias)
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
     def forward(self, x: torch.Tensor):
         h = x
         h = self.norm1(h)
-        h = nonlinearity(h)
+        h = act_layer(h)
         h = self.conv1(h)
 
         h = self.norm2(h)
-        h = nonlinearity(h)
+        h = act_layer(h)
         h = self.dropout(h)
         h = self.conv2(h)
 
@@ -115,7 +124,7 @@ class EncoderDownLayer(nn.Module):
     ):
         # use_attn = False
         super().__init__()
-        self.block = nn.ModuleList([
+        self.block: Sequence[ResnetBlock] | nn.ModuleList = nn.ModuleList([
             ResnetBlock(in_channels if i == 0 else out_channels, out_channels)
             for i in range(num_res_blocks)
         ])
@@ -166,8 +175,6 @@ class Encoder(nn.Module):
                 layer_channels[0] if i == 0 else layer_channels[i - 1],
                 layer_channels[i],
                 num_res_blocks,
-                # apply attention when stride >= 16
-                # in the original implementation, they apply attention when the resolution reaches 16 (from 256)
                 use_attn=i in attn_layers,
                 downsample=i != num_layers - 1,
                 gradient_checkpointing=gradient_checkpointing,
@@ -196,9 +203,9 @@ class Encoder(nn.Module):
         x = self.mid(x)
         # end
         x = self.norm_out(x)
-        x = nonlinearity(x)
-        x = self.conv_out(x)
-        return x, spacing, downsample_masks
+        x = act_layer(x)
+        z = self.conv_out(x)
+        return z, spacing, downsample_masks
 
 class DecoderUpLayer(nn.Module):
     def __init__(
@@ -296,7 +303,7 @@ class Decoder(nn.Module):
 
         # end
         x = self.norm_out(x)
-        x = nonlinearity(x)
+        x = act_layer(x)
         x = self.conv_out(x)
         return x
 

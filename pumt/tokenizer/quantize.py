@@ -48,6 +48,8 @@ class VectorQuantizer(nn.Module):
         # load pre-trained Gumbel VQGAN
         if (weight := state_dict.pop(f'{prefix}embed.weight', None)) is not None:
             state_dict[f'{prefix}embedding.weight'] = weight
+        if (key := f'{prefix}proj.weight') not in state_dict:
+            state_dict[key] = einops.rearrange(state_dict[f'{prefix}embedding.weight'], 'ne d -> ne d 1 1 1')
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, z: torch.Tensor):
