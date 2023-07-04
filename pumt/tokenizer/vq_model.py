@@ -162,6 +162,7 @@ class Encoder(nn.Module):
         num_res_blocks: int,
         z_channels: int,
         attn_layers: list[int],
+        mid_attn: bool = True,
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
     ):
@@ -186,7 +187,10 @@ class Encoder(nn.Module):
         # middle
         self.mid = nn.Sequential(OrderedDict(
             block_1=ResnetBlock(last_channels, dropout=dropout),
-            attn_1=AttnBlock(last_channels),
+            **(
+                dict(attn_1=AttnBlock(last_channels)) if mid_attn
+                else {}
+            ),
             block_2=ResnetBlock(last_channels, dropout=dropout),
         ))
 
@@ -255,6 +259,7 @@ class Decoder(nn.Module):
         num_res_blocks: int,
         z_channels: int,
         attn_layers: list[int],
+        mid_attn: bool = True,
         dropout: float = 0.0,
         gradient_checkpointing: bool = False,
     ):
@@ -268,7 +273,10 @@ class Decoder(nn.Module):
         # middle
         self.mid = nn.Sequential(OrderedDict(
             block_1=ResnetBlock(last_channels, dropout=dropout),
-            attn_1=AttnBlock(last_channels),
+            **(
+                dict(attn_1=AttnBlock(last_channels)) if mid_attn
+                else {}
+            ),
             block_2=ResnetBlock(last_channels, dropout=dropout),
         ))
 
@@ -315,10 +323,11 @@ class VQModel(pl.LightningModule):
         num_res_blocks: int,
         z_channels: int,
         attn_layers: list[int],
+        mid_attn: bool,
         # lossconfig,
         num_embeddings: int,
         embed_dim: int,
-        mode: Literal['nearst', 'gumbel', 'soft'],
+        mode: Literal['nearest', 'gumbel', 'soft'],
         commitment_loss_beta: float = 0.25,
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
@@ -326,8 +335,8 @@ class VQModel(pl.LightningModule):
         super().__init__()
         self.embed_dim = embed_dim
         self.n_embed = num_embeddings
-        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, dropout, gradient_checkpointing)
-        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, dropout, gradient_checkpointing)
+        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, mid_attn, dropout, gradient_checkpointing)
+        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, mid_attn, dropout, gradient_checkpointing)
         self.quantize = VectorQuantizer(num_embeddings, embed_dim, mode, commitment_loss_beta)
         self.quant_conv = InflatableConv3d(z_channels, embed_dim, 1)
         self.post_quant_conv = InflatableConv3d(embed_dim, z_channels, 1)

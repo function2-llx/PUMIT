@@ -26,7 +26,7 @@ class VectorQuantizer(nn.Module):
         self,
         num_embeddings: int,
         embedding_dim: int,
-        mode: Literal['nearst', 'gumbel', 'soft'],
+        mode: Literal['nearest', 'gumbel', 'soft'],
         beta: float = 0.25,
     ):
         super().__init__()
