@@ -5,7 +5,6 @@ import einops
 import torch
 import pytorch_lightning as pl
 from PIL import Image
-from omegaconf import OmegaConf
 
 from torchvision import transforms as tvt
 from torchvision.utils import save_image
@@ -13,7 +12,7 @@ from torchvision.utils import save_image
 from luolib.conf.utils import instantiate_from_conf
 from luolib.models import load_ckpt
 
-from pumt.tokenizer.vq_model import VQModel
+from pumt.tokenizer.vqgan import VQGAN
 
 src = Path('src/view1_frontal.jpg')
 
@@ -43,8 +42,7 @@ def main():
     from torch.nn import functional as nnf
     # x = nnf.interpolate(x, scale_factor=(1, 0.5, 0.5), mode='trilinear')
     print(x.shape)
-    conf = OmegaConf.load(args.conf_path)
-    model: VQModel = instantiate_from_conf(conf).cuda().eval()
+    model: VQGAN = instantiate_from_conf(args.conf_path).cuda().eval()
     load_ckpt(model, args.ckpt_path)
     spacing = torch.tensor([[1e6, 1, 1]], device='cuda')
     with torch.no_grad():

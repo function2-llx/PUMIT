@@ -6,12 +6,18 @@ import cytoolz
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning.core.optimizer import LightningOptimizer
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
+from luolib.conf import OptimizerConf, SchedulerConf
 from luolib.models.adaptive_resampling import AdaptiveDownsample, AdaptiveUpsample
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
+from luolib.optim import create_optimizer
+from luolib.scheduler import create_scheduler
+from luolib.utils import DataKey
 
+from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
@@ -158,10 +164,10 @@ class Encoder(nn.Module):
     def __init__(
         self,
         in_channels: int,
+        z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
-        z_channels: int,
-        attn_layers: list[int],
+        attn_layer_ids: list[int],
         mid_attn: bool = True,
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
@@ -176,7 +182,7 @@ class Encoder(nn.Module):
                 layer_channels[0] if i == 0 else layer_channels[i - 1],
                 layer_channels[i],
                 num_res_blocks,
-                use_attn=i in attn_layers,
+                use_attn=i in attn_layer_ids,
                 downsample=i != num_layers - 1,
                 gradient_checkpointing=gradient_checkpointing,
             )
@@ -254,11 +260,11 @@ class Decoder(nn.Module):
 
     def __init__(
         self,
-        out_channels: int,
+        in_channels: int,  # number of channels of output reconstruction
+        z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
-        z_channels: int,
-        attn_layers: list[int],
+        attn_layer_ids: Sequence[int],
         mid_attn: bool = True,
         dropout: float = 0.0,
         gradient_checkpointing: bool = False,
@@ -286,7 +292,7 @@ class Decoder(nn.Module):
                 layer_channels[i + 1] if i + 1 < num_layers else layer_channels[-1],
                 layer_channels[i],
                 num_res_blocks,
-                use_attn=i in attn_layers,
+                use_attn=i in attn_layer_ids,
                 upsample=i != 0,
                 gradient_checkpointing=gradient_checkpointing,
             )
@@ -296,7 +302,7 @@ class Decoder(nn.Module):
         # end
         first_channels = layer_channels[0]
         self.norm_out = get_norm_layer(first_channels)
-        self.conv_out = InflatableOutputConv3d(first_channels, out_channels, kernel_size=3, padding=1)
+        self.conv_out = InflatableOutputConv3d(first_channels, in_channels, kernel_size=3, padding=1)
 
     def forward(self, z: torch.Tensor, upsample_masks: list[torch.Tensor]):
         # convert z to last feature map channels
@@ -315,34 +321,31 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-class VQModel(pl.LightningModule):
+class VQGAN(pl.LightningModule):
     def __init__(
         self,
-        in_channels: int,
-        layer_channels: Sequence[int],
-        num_res_blocks: int,
         z_channels: int,
-        attn_layers: list[int],
-        mid_attn: bool,
-        # lossconfig,
-        num_embeddings: int,
-        embed_dim: int,
-        mode: Literal['nearest', 'gumbel', 'soft'],
-        commitment_loss_beta: float = 0.25,
-        dropout: float = 0.,
-        gradient_checkpointing: bool = False,
+        embedding_dim: int,
+        ed_conf: dict,
+        vq_conf: dict,
+        loss_conf: dict,
+        optim_conf: OptimizerConf | None = None,
+        disc_optim_conf: OptimizerConf | None = None,
+        scheduler_conf: SchedulerConf | None = None,
     ):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.n_embed = num_embeddings
-        self.encoder = Encoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, mid_attn, dropout, gradient_checkpointing)
-        self.decoder = Decoder(in_channels, layer_channels, num_res_blocks, z_channels, attn_layers, mid_attn, dropout, gradient_checkpointing)
-        self.quantize = VectorQuantizer(num_embeddings, embed_dim, mode, commitment_loss_beta)
-        self.quant_conv = InflatableConv3d(z_channels, embed_dim, 1)
-        self.post_quant_conv = InflatableConv3d(embed_dim, z_channels, 1)
-        # self.loss = instantiate_from_config(lossconfig)
+        self.encoder = Encoder(**ed_conf)
+        self.decoder = Decoder(**ed_conf)
+        self.quantize = VectorQuantizer(**vq_conf)
+        self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
+        self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
+        self.loss = VQGANLoss(**loss_conf)
+
         # self.scheduler_config = scheduler_config
-        # self.lr_g_factor = lr_g_factor
+        self.optim_conf = optim_conf
+        self.disc_optim_conf = disc_optim_conf
+        self.scheduler_conf = scheduler_conf
+        self.automatic_optimization = False
 
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
@@ -354,123 +357,52 @@ class VQModel(pl.LightningModule):
 
     def decode(self, z_q: torch.Tensor, upsample_masks: list[torch.Tensor]):
         z_q = self.post_quant_conv(z_q)
-        x_dec = self.decoder.forward(z_q, upsample_masks)
-        return x_dec
+        x_rec = self.decoder.forward(z_q, upsample_masks)
+        return x_rec
 
     def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
         quant_out, downsample_masks = self.encode(x, spacing)
-        x_dec = self.decode(quant_out.z_q, downsample_masks)
-        return x_dec, quant_out
+        x_rec = self.decode(quant_out.z_q, downsample_masks)
+        return x_rec, quant_out
 
-#     def get_input(self, batch, k):
-#         x = batch[k]
-#         if len(x.shape) == 3:
-#             x = x[..., None]
-#         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format).float()
-#         if self.batch_resize_range is not None:
-#             lower_size = self.batch_resize_range[0]
-#             upper_size = self.batch_resize_range[1]
-#             if self.global_step <= 4:
-#                 # do the first few batches with max size to avoid later oom
-#                 new_resize = upper_size
-#             else:
-#                 new_resize = np.random.choice(np.arange(lower_size, upper_size + 16, 16))
-#             if new_resize != x.shape[2]:
-#                 x = F.interpolate(x, size=new_resize, mode="bicubic")
-#             x = x.detach()
-#         return x
-#
-#     def training_step(self, batch, batch_idx, optimizer_idx):
-#         # https://github.com/pytorch/pytorch/issues/37142
-#         # try not to fool the heuristics
-#         x = self.get_input(batch, self.image_key)
-#         xrec, qloss, ind = self(x, return_pred_indices=True)
-#
-#         if optimizer_idx == 0:
-#             # autoencode
-#             aeloss, log_dict_ae = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
-#                                             last_layer=self.get_last_layer(), split="train",
-#                                             predicted_indices=ind)
-#
-#             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-#             return aeloss
-#
-#         if optimizer_idx == 1:
-#             # discriminator
-#             discloss, log_dict_disc = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
-#                                                 last_layer=self.get_last_layer(), split="train")
-#             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-#             return discloss
-#
-#     def validation_step(self, batch, batch_idx):
-#         log_dict = self._validation_step(batch, batch_idx)
-#         with self.ema_scope():
-#             log_dict_ema = self._validation_step(batch, batch_idx, suffix="_ema")
-#         return log_dict
-#
-#     def _validation_step(self, batch, batch_idx, suffix=""):
-#         x = self.get_input(batch, self.image_key)
-#         xrec, qloss, ind = self(x, return_pred_indices=True)
-#         aeloss, log_dict_ae = self.loss(qloss, x, xrec, 0,
-#                                         self.global_step,
-#                                         last_layer=self.get_last_layer(),
-#                                         split="val" + suffix,
-#                                         predicted_indices=ind
-#                                         )
-#
-#         discloss, log_dict_disc = self.loss(qloss, x, xrec, 1,
-#                                             self.global_step,
-#                                             last_layer=self.get_last_layer(),
-#                                             split="val" + suffix,
-#                                             predicted_indices=ind
-#                                             )
-#         rec_loss = log_dict_ae[f"val{suffix}/rec_loss"]
-#         self.log(f"val{suffix}/rec_loss", rec_loss,
-#                  prog_bar=True, logger=True, on_step=False, on_epoch=True, sync_dist=True)
-#         self.log(f"val{suffix}/aeloss", aeloss,
-#                  prog_bar=True, logger=True, on_step=False, on_epoch=True, sync_dist=True)
-#         if version.parse(pl.__version__) >= version.parse('1.4.0'):
-#             del log_dict_ae[f"val{suffix}/rec_loss"]
-#         self.log_dict(log_dict_ae)
-#         self.log_dict(log_dict_disc)
-#         return self.log_dict
-#
-#     def configure_optimizers(self):
-#         lr_d = self.learning_rate
-#         lr_g = self.lr_g_factor * self.learning_rate
-#         print("lr_d", lr_d)
-#         print("lr_g", lr_g)
-#         opt_ae = torch.optim.Adam(list(self.encoder.parameters()) +
-#                                   list(self.decoder.parameters()) +
-#                                   list(self.quantize.parameters()) +
-#                                   list(self.quant_conv.parameters()) +
-#                                   list(self.post_quant_conv.parameters()),
-#                                   lr=lr_g, betas=(0.5, 0.9))
-#         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
-#                                     lr=lr_d, betas=(0.5, 0.9))
-#
-#         if self.scheduler_config is not None:
-#             scheduler = instantiate_from_config(self.scheduler_config)
-#
-#             print("Setting up LambdaLR scheduler...")
-#             scheduler = [
-#                 {
-#                     'scheduler': LambdaLR(opt_ae, lr_lambda=scheduler.schedule),
-#                     'interval': 'step',
-#                     'frequency': 1
-#                 },
-#                 {
-#                     'scheduler': LambdaLR(opt_disc, lr_lambda=scheduler.schedule),
-#                     'interval': 'step',
-#                     'frequency': 1
-#                 },
-#             ]
-#             return [opt_ae, opt_disc], scheduler
-#         return [opt_ae, opt_disc], []
-#
-#     def get_last_layer(self):
-#         return self.decoder.conv_out.weight
-#
+    def log_dict_split(self, data: dict, split: str):
+        self.log_dict({f'{split}/{k}': v for k, v in data.items()})
+
+    def training_step(self, batch: dict[str, torch.Tensor], _batch_idx: int):
+        x = batch[DataKey.IMG]
+        spacing = batch[DataKey.SPACING]
+        x_rec, quant_out = self.forward(x, spacing)
+        loss, disc_loss, log_dict = self.loss.forward(
+            x, x_rec, quant_out.loss, self.global_step,
+            adaptive_weight_ref=self.decoder.conv_out.weight,
+        )
+        optimizer, disc_optimizer = self.optimizers()
+        optimizer.zero_grad()
+        self.manual_backward(loss)
+        optimizer.step()
+        self.manual_backward(disc_loss)
+        disc_optimizer.step()
+        self.log_dict_split(log_dict, 'train')
+
+    def validation_step(self, batch: dict[str, torch.Tensor], _batch_idx: int):
+        x = batch[DataKey.IMG]
+        spacing = batch[DataKey.SPACING]
+        x_rec, quant_out = self.forward(x, spacing)
+        loss, disc_loss, log_dict = self.loss.forward(x, x_rec, quant_out.loss)
+        self.log_dict_split(log_dict, 'val')
+
+    def configure_optimizers(self):
+        optimizer = create_optimizer(
+            self.optim_conf,
+            cytoolz.concat([
+                child.parameters()
+                for name, child in self.named_children() if name != 'loss'
+            ]),
+        )
+        disc_optimizer = create_optimizer(self.disc_optim_conf, self.loss.parameters())
+        scheduler = create_scheduler(self.scheduler_conf, optimizer)
+        return [optimizer, disc_optimizer], scheduler
+
 #     def log_images(self, batch, only_inputs=False, plot_ema=False, **kwargs):
 #         log = dict()
 #         x = self.get_input(batch, self.image_key)

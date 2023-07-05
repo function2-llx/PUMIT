@@ -16,8 +16,8 @@ from monai.config import PathLike
 @dataclass
 class VectorQuantizerOutput:
     z_q: torch.Tensor
-    loss: torch.Tensor
     index: torch.Tensor
+    loss: torch.Tensor
     probs: torch.Tensor | None = None
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
@@ -30,31 +30,33 @@ class VectorQuantizer(nn.Module):
         beta: float = 0.25,
     ):
         super().__init__()
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
         self.mode = mode
         if mode == 'nearest':
             self.beta = beta
             self.register_module('proj', None)
         else:
             # calculate categorical distribution over embeddings
-            # use conv here to match the implementation in VQGAN's repository
-            self.proj = InflatableConv3d(embedding_dim, num_embeddings, 1)
+            self.proj = nn.Linear(embedding_dim, num_embeddings)
 
-        self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
-        nn.init.uniform_(self.embedding.weight, -1.0 / self.num_embeddings, 1.0 / self.num_embeddings)
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
-        # load pre-trained Gumbel VQGAN
         if (weight := state_dict.pop(f'{prefix}embed.weight', None)) is not None:
+            # load pre-trained Gumbel VQGAN
             state_dict[f'{prefix}embedding.weight'] = weight
-        if (key := f'{prefix}proj.weight') not in state_dict:
-            state_dict[key] = einops.rearrange(state_dict[f'{prefix}embedding.weight'], 'ne d -> ne d 1 1 1')
+        if (weight := state_dict.pop(proj_weight_key := f'{prefix}proj.weight', None)) is not None:
+            # convert 1x1 conv2d weight to linear
+            if weight.ndim == 4 and weight.shape[2:] == (1, 1):
+                state_dict[proj_weight_key] = weight.squeeze()
+        elif self.mode != 'nearest':
+            # dot product as logit
+            state_dict[proj_weight_key] = einops.rearrange(state_dict[f'{prefix}embedding.weight'], 'ne d -> ne d 1 1 1')
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, z: torch.Tensor):
+        z = channel_last(z).contiguous()
         if self.mode == 'nearest':
-            z = channel_last(z).contiguous()
             # distances from z to embeddings, exclude |z|^2
             d = torch.sum(self.embedding.weight ** 2, dim=1) \
                 - 2 * einops.einsum(z, self.embedding.weight, '... d, ne d -> ... ne')
@@ -65,24 +67,25 @@ class VectorQuantizer(nn.Module):
             z_q = z + (z_q - z).detach()
             # reshape back to match original input shape
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, loss, index)
+            return VectorQuantizerOutput(z_q, index, loss)
         else:
-            logits = self.proj(z)
-            probs = logits.softmax(dim=1)
-            kld = -((logits - logits.logsumexp(dim=1, keepdim=True)) * probs).sum(dim=1)
-            loss = kld.mean()
+            logits: torch.Tensor = self.proj(z)
+            probs = logits.softmax(dim=-1)
+            entropy = einops.einsum(logits.log_softmax(dim=-1), probs, '... ne, ... ne -> ...')
+            loss = entropy.mean()
             if self.mode == 'gumbel':
                 if self.training:
-                    one_hot_prob = nnf.gumbel_softmax(logits, hard=True, dim=1)
-                    index = one_hot_prob.argmax(dim=1)
-                    z_q = einops.einsum(one_hot_prob, self.embedding.weight, 'n ne ..., ne d -> n d ...')
+                    one_hot_prob = nnf.gumbel_softmax(logits, hard=True, dim=-1)
+                    index = one_hot_prob.argmax(dim=-1, keepdim=True)
+                    z_q = einops.einsum(one_hot_prob, self.embedding.weight, '... ne, ne d -> n ... d')
                 else:
                     index = probs.argmax(dim=1)
-                    z_q = channel_first(self.embedding(index)).contiguous()
+                    z_q = self.embedding(index)
             else:
                 index = probs
-                z_q = einops.einsum(probs, self.embedding.weight, 'n ne ..., ne d -> n d ...')
-            return VectorQuantizerOutput(z_q, loss, index, probs)
+                z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
+            z_q = channel_first(z_q).contiguous()
+            return VectorQuantizerOutput(z_q, index, loss, probs)
 
     def get_codebook_entry(self, index: torch.Tensor):
         if self.mode == 'soft':

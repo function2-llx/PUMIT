@@ -3,149 +3,122 @@ from typing import Literal
 import torch
 from torch import nn
 
-def l1(x, y):
-    return torch.abs(x-y)
+from luolib.models.adaptive_resampling import AdaptiveDownsample
+from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d
 
-def l2(x, y):
-    return torch.pow((x-y), 2)
+from .lpips import LPIPS
 
-class VQLPIPSWithDiscriminator(nn.Module):
+class PatchDiscriminator(nn.Module):
+    def __init__(self, in_channels: int, num_downsample_layers: int = 2, base_channels: int = 64):
+        super().__init__()
+        norm_layer = nn.InstanceNorm3d
+
+        layer_channels = [
+            base_channels << min(i, 3)
+            for i in range(num_downsample_layers + 1)
+        ]
+        self.main = nn.Sequential()
+        self.main.extend([
+            AdaptiveDownsample(in_channels, layer_channels[0], 4, InflatableInputConv3d),
+            nn.LeakyReLU(0.2, inplace=True),
+        ])
+        for i in range(1, num_downsample_layers + 1):  # gradually increase the number of filters
+            self.main.extend([
+                AdaptiveDownsample(layer_channels[i - 1], layer_channels[i], kernel_size=4) if i < num_downsample_layers
+                else InflatableConv3d(layer_channels[i - 1], layer_channels[i], 4, stride=1, padding=2),
+                norm_layer(layer_channels[i]),
+                nn.LeakyReLU(0.2, inplace=True)
+            ])
+        self.main.append(InflatableConv3d(layer_channels[-1], 1, kernel_size=4, stride=1, padding=2))
+
+    def forward(self, x: torch.Tensor):
+        return self.main(x)
+
+@torch.no_grad()
+def calculate_adaptive_weight(
+    loss1: torch.Tensor,
+    loss2: torch.Tensor,
+    ref_param: nn.Parameter,
+    eps: float = 1e-4,
+    minv: float = 0.,
+    maxv: float = 1e4,
+):
+    grad1, = torch.autograd.grad(loss1, ref_param, retain_graph=True)
+    grad2, = torch.autograd.grad(loss2, ref_param, retain_graph=True)
+    weight = grad1.norm() / (grad2.norm() + eps)
+    weight.clamp_(minv, maxv)
+    return weight
+
+class VQGANLoss(nn.Module):
     def __init__(
         self,
-        disc_start: int,
-        codebook_weight: float = 1.0,
-        rec_loss_weight: float = 1.0,
-        disc_num_layers: int = 3,
-        disc_in_channels: int = 3,
-        disc_factor: float = 1.0,
-        disc_weight: float = 1.0,
+        in_channels: int = 1,
+        quant_weight: float = 1.0,
+        rec_loss: Literal['l1', 'l2'] = 'l1',
+        rec_weight: float = 1.0,
         perceptual_weight: float = 1.0,
-        use_actnorm: bool = False,
-        disc_conditional: bool = False,
-        disc_ndf: int = 64,
-        disc_loss: Literal['hinge', 'vanilla'] = 'hinge',
-        n_classes=None,
-        perceptual_loss: Literal['lpips', 'clips', 'dists'] = 'lpips',
-        pixel_loss: Literal['l1', 'l2'] = 'l1',
+        disc_num_downsample_layers: int = 3,
+        disc_base_channels: int = 64,
+        gan_weight: float = 1.0,
+        gan_start_step: int = 0,
     ):
         super().__init__()
-        assert disc_loss in ['hinge', 'vanilla']
-        assert perceptual_loss in ['lpips', 'clips', 'dists']
-        assert pixel_loss in ['l1', 'l2']
-        self.codebook_weight = codebook_weight
-        self.pixel_weight = rec_loss_weight
-        if perceptual_loss == 'lpips':
-            print(f'{self.__class__.__name__}: Running with LPIPS.')
-            self.perceptual_loss = LPIPS().eval()
-        else:
-            raise ValueError(f'Unknown perceptual loss: >> {perceptual_loss} <<')
+        self.quant_weight = quant_weight
+        self.rec_weight = rec_weight
+        match rec_loss:
+            case 'l1':
+                self.rec_loss = nn.L1Loss()
+            case 'l2':
+                self.rec_loss = nn.MSELoss()
+            case _:
+                raise ValueError
+        self.perceptual_loss = LPIPS().eval()
+        print(f'{self.__class__.__name__}: Running with LPIPS.')
         self.perceptual_weight = perceptual_weight
+        self.gan_start_step = gan_start_step
+        self.gan_weight = gan_weight
 
-        if pixel_loss == 'l1':
-            self.pixel_loss = nn.L1Loss
-        else:
-            self.pixel_loss = l2
+        self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
+        print(f'{self.__class__.__name__} running with hinge W-GAN loss.')
 
-        self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
-                                                 n_layers=disc_num_layers,
-                                                 use_actnorm=use_actnorm,
-                                                 ndf=disc_ndf
-                                                 ).apply(weights_init)
-        self.discriminator_iter_start = disc_start
-        if disc_loss == 'hinge':
-            self.disc_loss = hinge_d_loss
-        elif disc_loss == 'vanilla':
-            self.disc_loss = vanilla_d_loss
-        else:
-            raise ValueError(f'Unknown GAN loss '{disc_loss}'.')
-        print(f'VQLPIPSWithDiscriminator running with {disc_loss} loss.')
-        self.disc_factor = disc_factor
-        self.discriminator_weight = disc_weight
-        self.disc_conditional = disc_conditional
-        self.n_classes = n_classes
-
-    def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
-        if last_layer is not None:
-            nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
-            g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
-        else:
-            nll_grads = torch.autograd.grad(nll_loss, self.last_layer[0], retain_graph=True)[0]
-            g_grads = torch.autograd.grad(g_loss, self.last_layer[0], retain_graph=True)[0]
-
-        d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
-        d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
-        d_weight = d_weight * self.discriminator_weight
-        return d_weight
-
-    def forward(self, codebook_loss, inputs, reconstructions, optimizer_idx,
-                global_step, last_layer=None, cond=None, split='train', predicted_indices=None):
-        if not exists(codebook_loss):
-            codebook_loss = torch.tensor([0.]).to(inputs.device)
-        # rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        rec_loss = self.pixel_loss(inputs.contiguous(), reconstructions.contiguous())
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_rec: torch.Tensor,
+        quant_loss: torch.Tensor,
+        global_step: int = 0,
+        adaptive_weight_ref: nn.Parameter | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        x = x.contiguous()
+        x_rec = x_rec.contiguous()
+        # generator part
+        rec_loss = self.rec_loss(x, x_rec)
         if self.perceptual_weight > 0:
-            p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
-            rec_loss = rec_loss + self.perceptual_weight * p_loss
+            perceptual_loss = self.perceptual_loss(x, x_rec)
         else:
-            p_loss = torch.tensor([0.0])
-
-        nll_loss = rec_loss
-        # nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
-        nll_loss = torch.mean(nll_loss)
-
-        # now the GAN part
-        if optimizer_idx == 0:
-            # generator update
-            if cond is None:
-                assert not self.disc_conditional
-                logits_fake = self.discriminator(reconstructions.contiguous())
+            perceptual_loss = torch.zeros_like(rec_loss)
+        vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
+        score_fake = self.discriminator(x_rec)
+        gan_loss = -score_fake.mean()
+        if self.training:
+            if global_step >= self.gan_start_step:
+                gan_weight = self.gan_weight * calculate_adaptive_weight(vq_loss, gan_loss, ref_param=adaptive_weight_ref)
             else:
-                assert self.disc_conditional
-                logits_fake = self.discriminator(torch.cat((reconstructions.contiguous(), cond), dim=1))
-            g_loss = -torch.mean(logits_fake)
+                gan_weight = 0
+        else:
+            gan_weight = self.gan_weight
+        loss = vq_loss + gan_weight * gan_loss
 
-            try:
-                d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer=last_layer)
-            except RuntimeError:
-                assert not self.training
-                d_weight = torch.tensor(0.0)
-
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean()
-
-            log = {'{}/total_loss'.format(split): loss.clone().detach().mean(),
-                   '{}/quant_loss'.format(split): codebook_loss.detach().mean(),
-                   '{}/nll_loss'.format(split): nll_loss.detach().mean(),
-                   '{}/rec_loss'.format(split): rec_loss.detach().mean(),
-                   '{}/p_loss'.format(split): p_loss.detach().mean(),
-                   '{}/d_weight'.format(split): d_weight.detach(),
-                   '{}/disc_factor'.format(split): torch.tensor(disc_factor),
-                   '{}/g_loss'.format(split): g_loss.detach().mean(),
-                   }
-            if predicted_indices is not None:
-                from timm.data import IMAGENET_DEFAULT_MEAN
-                IMAGENET_DEFAULT_MEAN
-                assert self.n_classes is not None
-                with torch.no_grad():
-                    perplexity, cluster_usage = measure_perplexity(predicted_indices, self.n_classes)
-                log[f'{split}/perplexity'] = perplexity
-                log[f'{split}/cluster_usage'] = cluster_usage
-            return loss, log
-
-        if optimizer_idx == 1:
-            # second pass for discriminator update
-            if cond is None:
-                logits_real = self.discriminator(inputs.contiguous().detach())
-                logits_fake = self.discriminator(reconstructions.contiguous().detach())
-            else:
-                logits_real = self.discriminator(torch.cat((inputs.contiguous().detach(), cond), dim=1))
-                logits_fake = self.discriminator(torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
-
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
-
-            log = {'{}/disc_loss'.format(split): d_loss.clone().detach().mean(),
-                   '{}/logits_real'.format(split): logits_real.detach().mean(),
-                   '{}/logits_fake'.format(split): logits_fake.detach().mean()
-                   }
-            return d_loss, log
+        # discriminator part
+        score_real = self.discriminator(x.detach())
+        score_fake = self.discriminator(x_rec.detach())
+        disc_loss = 0.5 * ((1 - score_real).relu() + (1 + score_fake).relu())
+        return loss, disc_loss, {
+            'loss': loss,
+            'rec_loss': rec_loss,
+            'perceptual_loss': perceptual_loss,
+            'quant_loss': quant_loss,
+            'vq_loss': vq_loss,
+            'gan_loss': gan_loss,
+            'disc_loss': disc_loss,
+        }

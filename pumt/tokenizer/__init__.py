@@ -1,0 +1,1 @@
+from .vqgan import VQGAN
