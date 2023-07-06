@@ -39,7 +39,7 @@ class DatasetProcessor(ABC):
 
     @property
     def output_root(self):
-        return PROCESSED_ROOT / self.name
+        return PROCESSED_ROOT / (self.name + '-new')
 
     @abstractmethod
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -86,13 +86,14 @@ class DatasetProcessor(ABC):
         try:
             data = loader(file.path)
         except Exception:
-            import traceback
-            traceback.print_exc()
-            import sys
-            sys.exit()
+            # import traceback
+            # traceback.print_exc()
+            # import sys
+            # sys.exit()
             print(file.path)
             return [{'key': file.key, 'origin': file.path}]
-
+        # if data.shape[1] != 1:
+        #     data = data.permute(0, 2, 1, 3)
         if cropper is None:
             cropper = self.get_cropper()
         ret = self.process_file_data(file, data, cropper)
@@ -117,10 +118,11 @@ class DatasetProcessor(ABC):
         save_path = self.output_root / 'data' / f'{key}.npz'
         np.savez(save_path, array=cropped.numpy(), affine=cropped.affine)
         cropped_f = cropped.float()
-        if cropped.shape[0] != 1:
-            print(key, modality, cropped.shape)
-            import sys
-            sys.exit()
+        # if cropped.shape[1] != 1:
+        #     print("0", img.shape)
+        #     print("1", cropped.shape)
+        #     import sys
+        #     sys.exit()
         return {
             'key': key,
             'modality': modality,
