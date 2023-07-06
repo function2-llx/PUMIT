@@ -1,5 +1,6 @@
 from typing import Literal
 
+import einops
 import torch
 from torch import nn
 
@@ -11,28 +12,32 @@ from .lpips import LPIPS
 class PatchDiscriminator(nn.Module):
     def __init__(self, in_channels: int, num_downsample_layers: int = 2, base_channels: int = 64):
         super().__init__()
-        norm_layer = nn.InstanceNorm3d
 
         layer_channels = [
             base_channels << min(i, 3)
             for i in range(num_downsample_layers + 1)
         ]
-        self.main = nn.Sequential()
+        self.main = nn.ModuleList()
         self.main.extend([
             AdaptiveDownsample(in_channels, layer_channels[0], 4, InflatableInputConv3d),
             nn.LeakyReLU(0.2, inplace=True),
         ])
         for i in range(1, num_downsample_layers + 1):  # gradually increase the number of filters
             self.main.extend([
-                AdaptiveDownsample(layer_channels[i - 1], layer_channels[i], kernel_size=4) if i < num_downsample_layers
-                else InflatableConv3d(layer_channels[i - 1], layer_channels[i], 4, stride=1, padding=2),
-                norm_layer(layer_channels[i]),
+                AdaptiveDownsample(layer_channels[i - 1], layer_channels[i], kernel_size=4, bias=False) if i < num_downsample_layers
+                else InflatableConv3d(layer_channels[i - 1], layer_channels[i], 4, stride=1, padding=1, bias=False),
+                nn.InstanceNorm3d(layer_channels[i], affine=True),
                 nn.LeakyReLU(0.2, inplace=True)
             ])
-        self.main.append(InflatableConv3d(layer_channels[-1], 1, kernel_size=4, stride=1, padding=2))
+        self.main.append(InflatableConv3d(layer_channels[-1], 1, kernel_size=4, stride=1, padding=1))
 
-    def forward(self, x: torch.Tensor):
-        return self.main(x)
+    def forward(self, x: torch.Tensor, spacing: torch.Tensor):
+        for module in self.main:
+            if isinstance(module, AdaptiveDownsample):
+                x, spacing, _ = module(x, spacing)
+            else:
+                x = module(x)
+        return x
 
 @torch.no_grad()
 def calculate_adaptive_weight(
@@ -57,6 +62,7 @@ class VQGANLoss(nn.Module):
         rec_loss: Literal['l1', 'l2'] = 'l1',
         rec_weight: float = 1.0,
         perceptual_weight: float = 1.0,
+        max_perceptual_slices: int = 16,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
         gan_weight: float = 1.0,
@@ -75,16 +81,40 @@ class VQGANLoss(nn.Module):
         self.perceptual_loss = LPIPS().eval()
         print(f'{self.__class__.__name__}: Running with LPIPS.')
         self.perceptual_weight = perceptual_weight
+        self.max_perceptual_slices = max_perceptual_slices
         self.gan_start_step = gan_start_step
         self.gan_weight = gan_weight
 
         self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
         print(f'{self.__class__.__name__} running with hinge W-GAN loss.')
 
+    def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
+        if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):
+            # checkpoint of VQGAN trained with Gumbel softmax is so amazing
+            disc_prefix = f'{prefix}discriminator.'
+            for key in list(state_dict.keys()):
+                if key.startswith(f'{disc_prefix}discriminators.'):
+                    weight = state_dict.pop(key)
+                    disc_id, suffix = key[len(disc_prefix) + len('discriminators.'):].split('.', 1)
+                    # pick the discriminator with patch size = 8
+                    if int(disc_id) == 1 and not any(
+                        key.endswith(bn_var) for bn_var in ['running_mean', 'running_var', 'num_batches_tracked']
+                    ):
+                        state_dict[f'{disc_prefix}{suffix}'] = weight
+        perceptual_loss_prefix = f'{prefix}perceptual_loss.'
+        for key in list(state_dict.keys()):
+            if key.startswith(perceptual_loss_prefix):
+                state_dict.pop(key)
+        # make `model.load_state_dict` happy about no missing keys
+        state_dict.update(self.perceptual_loss.state_dict(prefix=perceptual_loss_prefix))
+
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
     def forward(
         self,
         x: torch.Tensor,
         x_rec: torch.Tensor,
+        spacing: torch.Tensor,
         quant_loss: torch.Tensor,
         global_step: int = 0,
         adaptive_weight_ref: nn.Parameter | None = None,
@@ -94,11 +124,24 @@ class VQGANLoss(nn.Module):
         # generator part
         rec_loss = self.rec_loss(x, x_rec)
         if self.perceptual_weight > 0:
-            perceptual_loss = self.perceptual_loss(x, x_rec)
+            if self.training and x.shape[2] > self.max_perceptual_slices:
+                slice_indexes = einops.repeat(
+                    x.new_ones(x.shape[0], x.shape[2]).multinomial(self.max_perceptual_slices),
+                    'n d -> n c d h w', c=x.shape[1], h=x.shape[3], w=x.shape[4],
+                )
+                sampled_x = x.gather(dim=2, index=slice_indexes)
+                sampled_x_rec = x_rec.gather(dim=2, index=slice_indexes)
+            else:
+                sampled_x = x
+                sampled_x_rec = x_rec
+            perceptual_loss = self.perceptual_loss(
+                einops.rearrange(sampled_x, 'n c d h w -> (n d) c h w'),
+                einops.rearrange(sampled_x_rec, 'n c d h w -> (n d) c h w'),
+            )
         else:
             perceptual_loss = torch.zeros_like(rec_loss)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
-        score_fake = self.discriminator(x_rec)
+        score_fake = self.discriminator(x_rec, spacing)
         gan_loss = -score_fake.mean()
         if self.training:
             if global_step >= self.gan_start_step:
@@ -110,9 +153,10 @@ class VQGANLoss(nn.Module):
         loss = vq_loss + gan_weight * gan_loss
 
         # discriminator part
-        score_real = self.discriminator(x.detach())
-        score_fake = self.discriminator(x_rec.detach())
-        disc_loss = 0.5 * ((1 - score_real).relu() + (1 + score_fake).relu())
+        score_real = self.discriminator(x.detach(), spacing)
+        score_fake = self.discriminator(x_rec.detach(), spacing)
+        # hinge loss
+        disc_loss = 0.5 * ((1 - score_real).relu().mean() + (1 + score_fake).relu().mean())
         return loss, disc_loss, {
             'loss': loss,
             'rec_loss': rec_loss,

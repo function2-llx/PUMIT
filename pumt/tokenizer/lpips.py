@@ -13,10 +13,18 @@ class InputNormLayer(nn.Module):
     std: torch.Tensor
 
     def __init__(self):
-        super(InputNormLayer, self).__init__()
-        from timm.models import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-        self.register_buffer('mean', einops.rearrange(1 - 2 * torch.tensor(IMAGENET_DEFAULT_MEAN), 'c -> c 1 1'))
-        self.register_buffer('std', einops.rearrange(2 * torch.tensor(IMAGENET_DEFAULT_STD), 'c -> c 1 1'))
+        super().__init__()
+        from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+        self.register_buffer(
+            'mean',
+            einops.rearrange(1 - 2 * torch.tensor(IMAGENET_DEFAULT_MEAN), 'c -> c 1 1'),
+            persistent=False,
+        )
+        self.register_buffer(
+            'std',
+            einops.rearrange(2 * torch.tensor(IMAGENET_DEFAULT_STD), 'c -> c 1 1'),
+            persistent=False,
+        )
 
     def forward(self, x: torch.Tensor):
         x = einops.repeat(x, 'n 1 h w -> n c h w', c=3)

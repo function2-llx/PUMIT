@@ -153,7 +153,7 @@ class EncoderDownLayer(nn.Module):
                 x = block(x)
                 x = attn(x)
         if self.downsample is not None:
-            x, spacing, downsample_mask = self.downsample.forward(x, spacing)
+            x, spacing, downsample_mask = self.downsample(x, spacing)
         else:
             downsample_mask = x.new_zeros(x.shape[0], 3, dtype=bool)
         return x, spacing, downsample_mask
@@ -208,7 +208,7 @@ class Encoder(nn.Module):
         x = self.conv_in(x)
         downsample_masks = []
         for down in self.down:
-            x, spacing, downsample_mask = down.forward(x, spacing)
+            x, spacing, downsample_mask = down(x, spacing)
             downsample_masks.append(downsample_mask)
         x = self.mid(x)
         # end
@@ -252,7 +252,7 @@ class DecoderUpLayer(nn.Module):
                 x = block(x)
                 x = attn(x)
         if self.upsample is not None:
-            x = self.upsample.forward(x, upsample_mask)
+            x = self.upsample(x, upsample_mask)
         return x
 
 class Decoder(nn.Module):
@@ -313,7 +313,7 @@ class Decoder(nn.Module):
 
         # upsampling
         for up, upsample_mask in zip(reversed(self.up), reversed([torch.empty(0)] + upsample_masks[:-1])):
-            x = up.forward(x, upsample_mask)
+            x = up(x, upsample_mask)
 
         # end
         x = self.norm_out(x)
@@ -341,7 +341,6 @@ class VQGAN(pl.LightningModule):
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
         self.loss = VQGANLoss(**loss_conf)
 
-        # self.scheduler_config = scheduler_config
         self.optim_conf = optim_conf
         self.disc_optim_conf = disc_optim_conf
         self.scheduler_conf = scheduler_conf
@@ -350,14 +349,14 @@ class VQGAN(pl.LightningModule):
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
             spacing = x.new_ones(x.shape[0], 3)
-        z, spacing, downsample_masks = self.encoder.forward(x, spacing)
+        z, spacing, downsample_masks = self.encoder(x, spacing)
         z = self.quant_conv(z)
-        quant_out = self.quantize.forward(z)
+        quant_out = self.quantize(z)
         return quant_out, downsample_masks
 
     def decode(self, z_q: torch.Tensor, upsample_masks: list[torch.Tensor]):
         z_q = self.post_quant_conv(z_q)
-        x_rec = self.decoder.forward(z_q, upsample_masks)
+        x_rec = self.decoder(z_q, upsample_masks)
         return x_rec
 
     def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
@@ -368,12 +367,12 @@ class VQGAN(pl.LightningModule):
     def log_dict_split(self, data: dict, split: str):
         self.log_dict({f'{split}/{k}': v for k, v in data.items()})
 
-    def training_step(self, batch: dict[str, torch.Tensor], _batch_idx: int):
+    def training_step(self, batch: dict[str, torch.Tensor], *args, **kwargs):
         x = batch[DataKey.IMG]
         spacing = batch[DataKey.SPACING]
-        x_rec, quant_out = self.forward(x, spacing)
-        loss, disc_loss, log_dict = self.loss.forward(
-            x, x_rec, quant_out.loss, self.global_step,
+        x_rec, quant_out = self(x, spacing)
+        loss, disc_loss, log_dict = self.loss(
+            x, x_rec, quant_out.loss, spacing, self.global_step,
             adaptive_weight_ref=self.decoder.conv_out.weight,
         )
         optimizer, disc_optimizer = self.optimizers()
@@ -384,11 +383,11 @@ class VQGAN(pl.LightningModule):
         disc_optimizer.step()
         self.log_dict_split(log_dict, 'train')
 
-    def validation_step(self, batch: dict[str, torch.Tensor], _batch_idx: int):
+    def validation_step(self, batch: dict[str, torch.Tensor], *args, **kwargs):
         x = batch[DataKey.IMG]
         spacing = batch[DataKey.SPACING]
-        x_rec, quant_out = self.forward(x, spacing)
-        loss, disc_loss, log_dict = self.loss.forward(x, x_rec, quant_out.loss)
+        x_rec, quant_out = self(x, spacing)
+        loss, disc_loss, log_dict = self.loss(x, x_rec, spacing, quant_out.loss)
         self.log_dict_split(log_dict, 'val')
 
     def configure_optimizers(self):
