@@ -37,6 +37,8 @@ class VectorQuantizer(nn.Module):
         else:
             # calculate categorical distribution over embeddings
             self.proj = nn.Linear(embedding_dim, num_embeddings)
+            if mode == 'gumbel':
+                self.temperature = 1.
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
@@ -75,7 +77,7 @@ class VectorQuantizer(nn.Module):
             loss = entropy.mean()
             if self.mode == 'gumbel':
                 if self.training:
-                    one_hot_prob = nnf.gumbel_softmax(logits, hard=True, dim=-1)
+                    one_hot_prob = nnf.gumbel_softmax(logits, self.temperature, hard=True, dim=-1)
                     index = one_hot_prob.argmax(dim=-1, keepdim=True)
                     z_q = einops.einsum(one_hot_prob, self.embedding.weight, '... ne, ne d -> n ... d')
                 else:

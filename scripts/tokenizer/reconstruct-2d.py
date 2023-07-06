@@ -11,6 +11,7 @@ from torchvision.utils import save_image
 
 from luolib.conf.utils import instantiate_from_conf
 from luolib.models import load_ckpt
+from luolib.utils import DataKey
 
 from pumt.tokenizer.vqgan import VQGAN
 
@@ -46,11 +47,15 @@ def main():
     load_ckpt(model, args.ckpt_path)
     spacing = torch.tensor([[1e6, 1, 1]], device='cuda')
     with torch.no_grad():
-        dec, quant_out = model.forward(x, spacing)
-    print('output shape:', dec.shape)
-    dec = nnf.interpolate(dec, size=(1, 512, 512), mode='trilinear')
-    print(dec.shape, quant_out.loss, quant_out.index.shape)
-    save_image((dec[0, :, 0] + 1) / 2, args.out_path)
+        x_rec, quant_out = model.forward(x, spacing)
+        loss, disc_loss, log_dict = model.loss.forward(x, x_rec, spacing, quant_out.loss)
+    print('output shape:', x_rec.shape)
+    x_rec = nnf.interpolate(x_rec, size=(1, 512, 512), mode='trilinear')
+    print('index shape:', quant_out.index.shape)
+    print('rec shape:', x_rec.shape)
+    for k, v in log_dict.items():
+        print(k, v)
+    save_image((x_rec[0, :, 0] + 1) / 2, args.out_path)
 
 if __name__ == '__main__':
     main()
