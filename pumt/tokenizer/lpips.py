@@ -7,7 +7,9 @@ import torch
 import torch.nn as nn
 from torchvision import models as tvm
 
-# convert gray [-1, 1] to RGB ImageNet normalized
+from pumt.tokenizer.utils import ensure_rgb
+
+# convert [-1, 1] to ImageNet normalized
 class InputNormLayer(nn.Module):
     mean: torch.Tensor
     std: torch.Tensor
@@ -27,8 +29,7 @@ class InputNormLayer(nn.Module):
         )
 
     def forward(self, x: torch.Tensor):
-        x = einops.repeat(x, 'n 1 h w -> n c h w', c=3)
-        return (x - self.mean) / self.std
+        return (ensure_rgb(x) - self.mean) / self.std
 
 class LPIPS(nn.Module):
     # Learned perceptual metric

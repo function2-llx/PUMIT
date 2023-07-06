@@ -1,12 +1,10 @@
 from collections import OrderedDict
 from collections.abc import Sequence
-from typing import Literal
 
 import cytoolz
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from pytorch_lightning.core.optimizer import LightningOptimizer
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
@@ -19,6 +17,7 @@ from luolib.utils import DataKey
 
 from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
+from .utils import ensure_rgb, rgb_to_gray
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
@@ -329,6 +328,7 @@ class VQGAN(pl.LightningModule):
         ed_conf: dict,
         vq_conf: dict,
         loss_conf: dict,
+        force_rgb: bool = True,
         optim_conf: OptimizerConf | None = None,
         disc_optim_conf: OptimizerConf | None = None,
         scheduler_conf: SchedulerConf | None = None,
@@ -340,6 +340,7 @@ class VQGAN(pl.LightningModule):
         self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
         self.loss = VQGANLoss(**loss_conf)
+        self.force_rgb = force_rgb
 
         self.optim_conf = optim_conf
         self.disc_optim_conf = disc_optim_conf
@@ -360,8 +361,11 @@ class VQGAN(pl.LightningModule):
         return x_rec
 
     def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
-        quant_out, downsample_masks = self.encode(x, spacing)
+        quant_out, downsample_masks = self.encode(ensure_rgb(x, self.force_rgb), spacing)
         x_rec = self.decode(quant_out.z_q, downsample_masks)
+        if self.force_rgb and x.shape[1] == 1:
+            x_rec = rgb_to_gray(x_rec)
+
         return x_rec, quant_out
 
     def log_dict_split(self, data: dict, split: str):

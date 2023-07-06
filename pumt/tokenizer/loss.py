@@ -8,6 +8,7 @@ from luolib.models.adaptive_resampling import AdaptiveDownsample
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d
 
 from .lpips import LPIPS
+from .utils import ensure_rgb
 
 class PatchDiscriminator(nn.Module):
     def __init__(self, in_channels: int, num_downsample_layers: int = 2, base_channels: int = 64):
@@ -57,16 +58,17 @@ def calculate_adaptive_weight(
 class VQGANLoss(nn.Module):
     def __init__(
         self,
-        in_channels: int = 1,
+        in_channels: int,
         quant_weight: float = 1.0,
         rec_loss: Literal['l1', 'l2'] = 'l1',
         rec_weight: float = 1.0,
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
-        disc_num_downsample_layers: int = 3,
-        disc_base_channels: int = 64,
         gan_weight: float = 1.0,
         gan_start_step: int = 0,
+        disc_num_downsample_layers: int = 3,
+        disc_base_channels: int = 64,
+        disc_force_rgb: bool = True,
     ):
         super().__init__()
         self.quant_weight = quant_weight
@@ -86,6 +88,7 @@ class VQGANLoss(nn.Module):
         self.gan_weight = gan_weight
 
         self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
+        self.disc_force_rgb = disc_force_rgb
         print(f'{self.__class__.__name__} running with hinge W-GAN loss.')
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
@@ -121,7 +124,7 @@ class VQGANLoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, dict]:
         x = x.contiguous()
         x_rec = x_rec.contiguous()
-        # generator part
+
         rec_loss = self.rec_loss(x, x_rec)
         if self.perceptual_weight > 0:
             if self.training and x.shape[2] > self.max_perceptual_slices:
@@ -141,6 +144,10 @@ class VQGANLoss(nn.Module):
         else:
             perceptual_loss = torch.zeros_like(rec_loss)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
+
+        x = ensure_rgb(x, self.disc_force_rgb)
+        x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
+        # generator part
         score_fake = self.discriminator(x_rec, spacing)
         gan_loss = -score_fake.mean()
         if self.training:

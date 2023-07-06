@@ -15,7 +15,7 @@ from luolib.utils import DataKey
 
 from pumt.tokenizer.vqgan import VQGAN
 
-src = Path('src/view1_frontal.jpg')
+src = Path('img-src/Image_02L.jpg')
 
 def main():
     parser = ArgumentParser()
@@ -33,9 +33,9 @@ def main():
     print(args)
 
     pl.seed_everything(42)
-    img = Image.open(src).convert('L')
+    img = Image.open(src).convert('RGB')
     transform = tvt.Compose([
-        tvt.Resize(512),
+        tvt.Resize((528, 512)),
         tvt.ToTensor(),
     ])
     x = transform(img).cuda() * 2 - 1
@@ -48,7 +48,7 @@ def main():
     spacing = torch.tensor([[1e6, 1, 1]], device='cuda')
     with torch.no_grad():
         x_rec, quant_out = model.forward(x, spacing)
-        loss, disc_loss, log_dict = model.loss.forward(x, x_rec, spacing, quant_out.loss)
+        _, _, log_dict = model.loss.forward(x, x_rec, spacing, quant_out.loss)
     print('output shape:', x_rec.shape)
     x_rec = nnf.interpolate(x_rec, size=(1, 512, 512), mode='trilinear')
     print('index shape:', quant_out.index.shape)
