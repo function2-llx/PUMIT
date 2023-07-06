@@ -24,6 +24,7 @@ dependencies:
   - nibabel
   - itk
   - pydicom
+  - gdcm
 
   - pip
   - pip:
