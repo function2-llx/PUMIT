@@ -16,8 +16,11 @@ from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
 
 DATASETS_ROOT = Path('datasets')
-PROCESSED_ROOT = Path('datasets-PUMT')
+PROCESSED_ROOT = Path('datasets-PUMT-new')
 PROCESSED_ROOT.mkdir(exist_ok=True, parents=True)
+
+
+ORIENTATION_LIST = [mt.Orientation('RAS'), mt.Orientation('ARS'), mt.Orientation('SRA')]
 
 @dataclass
 class ImageFile:
@@ -83,6 +86,10 @@ class DatasetProcessor(ABC):
         try:
             data = loader(file.path)
         except Exception:
+            import traceback
+            traceback.print_exc()
+            import sys
+            sys.exit()
             print(file.path)
             return [{'key': file.key, 'origin': file.path}]
 
@@ -110,6 +117,10 @@ class DatasetProcessor(ABC):
         save_path = self.output_root / 'data' / f'{key}.npz'
         np.savez(save_path, array=cropped.numpy(), affine=cropped.affine)
         cropped_f = cropped.float()
+        if cropped.shape[0] != 1:
+            print(key, modality, cropped.shape)
+            import sys
+            sys.exit()
         return {
             'key': key,
             'modality': modality,
@@ -139,14 +150,36 @@ class Default3DLoaderMixin:
     reader = None
 
     def get_loader(self) -> Callable[[Path], MetaTensor]:
-        return mt.Compose([
-            mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
-            mt.Orientation('RAS'),
-            MetaTensor.contiguous,
-        ])
+        # return mt.Compose([
+        #     mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
+        #     mt.Orientation('RAS'),
+        #     MetaTensor.contiguous,
+        # ])
+        def adjust_orientation(path):
+            loader = mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True)
+            data = loader(path)
+            spaces= data.pixdim
+            shapes = data.shape[1:]
+            for ori in ORIENTATION_LIST:
+                comp = mt.Compose([
+                    mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
+                    ori,
+                    MetaTensor.contiguous,
+                ])(path).shape[1:]
+                if abs(comp[0] - comp[1]) > abs(comp[1] - comp[2]) and abs(comp[0] - comp[2]) > abs(comp[1] - comp[2]):
+                    orientation = ori
+                    break
+            return mt.Compose([
+                mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
+                orientation,
+                MetaTensor.contiguous,
+            ])(path)
+        return adjust_orientation
+        
+        
 
 class NaturalImageLoaderMixin:
-    dummy_dim: int = 1  # it seems that most 2D medical images are taken in the coronal plane
+    dummy_dim: int = 0  # it seems that most 2D medical images are taken in the coronal plane
     assert_gray_scale: bool = False
 
     def __init__(self, dummy_dim: int | None = None):
@@ -169,6 +202,7 @@ class NaturalImageLoaderMixin:
             mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
             self.check_and_adapt_to_3d,
         ])
+        
 
     def __call__(self, path: Path):
         return self.get_loader()(path)
@@ -349,8 +383,8 @@ class CheXpertProcessor(ConstantCropperMixin, DatasetProcessor):
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
         dummy_dim_mapping = {
-            'frontal': 1,
-            'lateral': 0,
+            'frontal': 0,
+            'lateral': 1,
         }
         for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
             view = path.stem.split('_')[1]
