@@ -376,7 +376,7 @@ class VQGAN(pl.LightningModule):
         spacing = batch[DataKey.SPACING]
         x_rec, quant_out = self(x, spacing)
         loss, disc_loss, log_dict = self.loss(
-            x, x_rec, quant_out.loss, spacing, self.global_step,
+            x, x_rec, spacing, quant_out.loss, self.global_step,
             adaptive_weight_ref=self.decoder.conv_out.weight,
         )
         optimizer, disc_optimizer = self.optimizers()
@@ -386,6 +386,7 @@ class VQGAN(pl.LightningModule):
         self.manual_backward(disc_loss)
         disc_optimizer.step()
         self.log_dict_split(log_dict, 'train')
+        return x_rec, log_dict
 
     def validation_step(self, batch: dict[str, torch.Tensor], *args, **kwargs):
         x = batch[DataKey.IMG]

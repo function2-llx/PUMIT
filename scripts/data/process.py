@@ -146,7 +146,7 @@ class Default3DLoaderMixin:
         ])
 
 class NaturalImageLoaderMixin:
-    dummy_dim: int = 1  # it seems that most 2D medical images are taken in the coronal plane
+    dummy_dim: int = 0
     assert_gray_scale: bool = False
 
     def __init__(self, dummy_dim: int | None = None):
@@ -318,6 +318,16 @@ class BCVAbdomenProcessor(BCVProcessor):
 class BCVCervixProcessor(BCVProcessor):
     name = 'BCV/Cervix'
 
+class BUSIProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+    name = 'BUSI'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(key, 'RGB/US', path)
+            for path in (self.dataset_root / 'Dataset_BUSI_with_GT').glob('*/*.png')
+            if 'mask' not in (key := path.stem)
+        ]
+
 class CGMHPelvisProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CGMH Pelvis'
 
@@ -348,17 +358,11 @@ class CheXpertProcessor(ConstantCropperMixin, DatasetProcessor):
     
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
-        dummy_dim_mapping = {
-            'frontal': 1,
-            'lateral': 0,
-        }
         for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
-            view = path.stem.split('_')[1]
             ret.append(ImageFile(
                 '-'.join([*path.parts[-3:-1], path.stem]),
                 'RGB/XR',
                 path,
-                loader=NaturalImageLoaderMixin(dummy_dim_mapping[view]),
             ))
 
         return ret

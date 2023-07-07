@@ -53,8 +53,7 @@ class LPIPS(nn.Module):
         for i in range(len(num_channels)):
             conv: nn.Conv2d = self.aggregate_layers[i][1]
             conv.load_state_dict({'weight': state_dict[f'lin{i}.model.1.weight']})
-        for param in self.parameters():
-            param.requires_grad = False
+        self.requires_grad_(False)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):
         x, y = self.input_norm_layer(x), self.input_norm_layer(y)

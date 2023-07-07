@@ -160,3 +160,4 @@ datasets-PUMT-new
 .vscode/
 pre-trained
 *.nii.gz
+test-images/
