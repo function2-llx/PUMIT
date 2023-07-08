@@ -1,8 +1,8 @@
+import hashlib
+import itertools as it
 from abc import abstractmethod, ABC
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-import hashlib
-import itertools as it
 from functools import cached_property
 from pathlib import Path
 
@@ -10,10 +10,12 @@ import cytoolz
 import numpy as np
 import pandas as pd
 import torch
+from torchvision import transforms as tvt
 from tqdm.contrib.concurrent import process_map
 
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
+from monai.utils import MetaKeys
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('datasets-PUMT')
@@ -54,8 +56,8 @@ class DatasetProcessor(ABC):
         files = self.get_image_files()
         if len(files) == 0:
             return
-        if (images_meta_path := self.output_root / 'images-meta.xlsx').exists():
-            images_meta = pd.read_excel(images_meta_path, index_col='key')
+        if (images_meta_path := self.output_root / 'images-meta.csv').exists():
+            images_meta = pd.read_csv(images_meta_path, index_col='key')
             remained_mask = images_meta['modality'].isna()
             remained_keys = images_meta.index[remained_mask]
             old_meta = images_meta[~remained_mask]
@@ -69,7 +71,9 @@ class DatasetProcessor(ABC):
         else:
             results = process_map(self.process_file, files, max_workers=max_workers, ncols=ncols, **kwargs)
             remained_meta = pd.DataFrame.from_records(cytoolz.concat(results), index='key')
-        pd.concat([old_meta, remained_meta]).to_excel(images_meta_path, freeze_panes=(1, 1))
+        meta = pd.concat([old_meta, remained_meta])
+        meta.to_csv(images_meta_path)
+        meta.to_excel(images_meta_path.with_suffix('.xlsx'), freeze_panes=(1, 1))
 
     def process_file(
         self,
@@ -108,7 +112,7 @@ class DatasetProcessor(ABC):
     def process_image(self, img: MetaTensor, key: str, modality: str | dict, cropper: Callable[[MetaTensor], MetaTensor], weight: float) -> dict:
         cropped = cropper(img)
         save_path = self.output_root / 'data' / f'{key}.npz'
-        np.savez(save_path, array=cropped.numpy(), affine=cropped.affine)
+        np.savez(save_path, array=cropped.cpu().numpy(), affine=cropped.affine)
         cropped_f = cropped.float()
         return {
             'key': key,
@@ -123,7 +127,7 @@ class DatasetProcessor(ABC):
             },
             **{
                 f'shape-origin-{i}': s
-                for i, s in enumerate(img.shape[1:])
+                for i, s in enumerate(img.meta[MetaKeys.SPATIAL_SHAPE])
             },
             'mean': cropped_f.mean().item(),
             'median': cropped_f.median().item(),
@@ -143,15 +147,16 @@ class Default3DLoaderMixin:
             mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
             mt.Orientation('RAS'),
             MetaTensor.contiguous,
+            MetaTensor.cuda,
         ])
 
 class NaturalImageLoaderMixin:
-    dummy_dim: int = 0
     assert_gray_scale: bool = False
+    max_smaller_size: int = 512
 
-    def __init__(self, dummy_dim: int | None = None):
-        if dummy_dim is not None:
-            self.dummy_dim = dummy_dim
+    def __init__(self):
+        self.resize = tvt.Resize(self.max_smaller_size, antialias=True)
+        self.crop = mt.CropForeground()
 
     def check_and_adapt_to_3d(self, img: MetaTensor):
         if img.shape[0] == 4:
@@ -160,13 +165,24 @@ class NaturalImageLoaderMixin:
         if self.assert_gray_scale and img.shape[0] != 1:
             assert (img[0] == img[1]).all() and (img[0] == img[2]).all()
             img = img[0:1]
-        img = img.unsqueeze(self.dummy_dim + 1)
-        img.affine[self.dummy_dim, self.dummy_dim] = 1e8
+        img = img.unsqueeze(1)
+        img.affine[0, 0] = 1e8
+        return img
+
+    def load(self, path: Path):
+        from torchvision.io import read_image
+        img = read_image(str(path)).cuda().div(255)
+        img = self.crop(img)
+        spatial_shape = (1, *img.shape[1:])
+        if min(img.shape[1:]) > self.max_smaller_size:
+            img = self.resize(img)
+        img = MetaTensor(img.mul(255).byte())
+        img.meta[MetaKeys.SPATIAL_SHAPE] = spatial_shape
         return img
 
     def get_loader(self) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
-            mt.LoadImage(image_only=True, dtype=None, ensure_channel_first=True),
+            self.load,
             self.check_and_adapt_to_3d,
         ])
 
@@ -194,7 +210,7 @@ class PercentileCropperMixin(ValueBasedCropper):
     exclude_min: bool = True
 
     def get_crop_value(self, img: MetaTensor):
-        ret = torch.empty(img.shape[0])
+        ret = img.new_empty((img.shape[0], ))
         for i, c in enumerate(img.float()):
             if self.exclude_min:
                 min_v = c.min()
@@ -330,10 +346,11 @@ class BUSIProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProces
 
 class CGMHPelvisProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CGMH Pelvis'
+    assert_gray_scale = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
-            ImageFile(path.stem, 'RGB/XR', path)
+            ImageFile(path.stem, 'gray/XR', path)
             for path in (self.dataset_root / 'CGMH_PelvisSegment' / 'Image').glob('*.png')
         ]
 
@@ -349,19 +366,23 @@ class ChákṣuProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetP
             for path in image_dir.iterdir() if path.suffix.lower() in ['.png', '.jpg']
         ]
 
-class CheXpertProcessor(ConstantCropperMixin, DatasetProcessor):
+class CheXpertProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CheXpert'
+    assert_gray_scale: bool = True
 
     @property
     def dataset_root(self):
         return DATASETS_ROOT / self.name / 'chexpertchestxrays-u20210408'
+
+    def process(self, *args, **kwargs):
+        return super().process(*args, chunksize=10, **kwargs)
     
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
         for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
             ret.append(ImageFile(
                 '-'.join([*path.parts[-3:-1], path.stem]),
-                'RGB/XR',
+                'gray/XR',
                 path,
             ))
 
@@ -522,6 +543,72 @@ class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor
                 modality = f'MRI/{modality}'
             ret.append(ImageFile(sid, modality, path))
         return ret
+
+class HC18Processor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
+    name = 'HC18'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(f'{split}-{path.stem}', 'RGB/US', path)
+            for split in ['training', 'test']
+            for path in (self.dataset_root / f'{split}_set').glob('*HC.png')
+        ]
+
+class IChallengeProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor, ABC):
+    pass
+
+class IChallengeADAMProcessor(IChallengeProcessor):
+    name = 'iChallenge/ADAM'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'RGB/fundus', path)
+            for data_dir in [
+                'Test/Test-image-400',
+                'Train/Training-image-400',
+                'Validation/image',
+            ]
+            for path in (self.dataset_root / data_dir).rglob('*.jpg')
+        ]
+    
+class IChallengeGAMMAProcessor(IChallengeProcessor):
+    name = 'iChallenge/GAMMA'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'RGB/fundus', path)
+            for path in self.dataset_root.glob('*/multi-modality_images/*/*.jpg')
+        ]
+
+class IChallengePALMProcessor(IChallengeProcessor):
+    name = 'iChallenge/PALM'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.stem, 'RGB/fundus', path)
+            for data_dir in [
+                'Train/PALM-Training400',
+                'Validation/Validation-400',
+                'Test/PALM-Testing400-Images',
+            ]
+            for path in (self.dataset_root / data_dir).glob('*.jpg')
+        ]
+
+class IChallengeREFUGE2Processor(IChallengeProcessor):
+    name = 'iChallenge/REFUGE2'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(f'R1-{path.stem}' if data_dir.startswith('Train') else path.stem, 'RGB/fundus', path)
+            for data_dir in [
+                'Train/REFUGE1-train/Training400',
+                'Train/REFUGE1-val/REFUGE-Validation400',
+                'Train/REFUGE1-test/Test400',
+                'Validation/Images',
+                'Test/refuge2-test',
+            ]
+            for path in (self.dataset_root / data_dir).rglob('*.jpg')
+        ]
 
 def file_sha3(filepath: Path):
     sha3_hash = hashlib.sha3_256()
@@ -699,18 +786,22 @@ class NIHChestXRayProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, Datas
     def dataset_root(self):
         return DATASETS_ROOT / self.name / 'CXR8'
 
+    def process(self, *args, **kwargs):
+        return super().process(*args, chunksize=10, **kwargs)
+
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
-            ImageFile(path.stem, 'RGB/XR', path)
+            ImageFile(path.stem, 'gray/XR', path)
             for path in (self.dataset_root / 'images' / 'images').glob('*.png')
         ]
 
 class PelviXNetProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'PelviXNet'
+    assert_gray_scale = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
-            ImageFile(path.name, 'RGB/XR', path)
+            ImageFile(path.stem, 'gray/XR', path)
             for path in (self.dataset_root / 'pxr-150' / 'images_all').glob('*.png')
         ]
 
@@ -726,7 +817,7 @@ class PICAIProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProces
             'hbv': 'DWI',
         }
         return [
-            ImageFile(key := path.stem, mapping[key.rsplit('_', 1)[1]], path)
+            ImageFile(key := path.stem, f"MRI/{mapping[key.rsplit('_', 1)[1]]}", path)
             for path in (self.dataset_root / 'public_images').rglob('*.mha')
         ]
 
