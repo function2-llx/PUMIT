@@ -154,10 +154,10 @@ cython_debug/
 
 .idea/
 datasets
-datasets-PUMT
-datasets-PUMT-new
+datasets-PUMT*
 .run
 .vscode/
 pre-trained
 *.nii.gz
 test-images/
+pyrightconfig.json
