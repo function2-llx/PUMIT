@@ -371,29 +371,41 @@ class VQGAN(pl.LightningModule):
     def log_dict_split(self, data: dict, split: str):
         self.log_dict({f'{split}/{k}': v for k, v in data.items()})
 
-    def training_step(self, batch: dict[str, torch.Tensor], *args, **kwargs):
-        x = batch[DataKey.IMG]
-        spacing = batch[DataKey.SPACING]
-        x_rec, quant_out = self(x, spacing)
-        loss, disc_loss, log_dict = self.loss(
-            x, x_rec, spacing, quant_out.loss, self.global_step,
-            adaptive_weight_ref=self.decoder.conv_out.weight,
-        )
+    def forward_batch(self, batch: dict) -> dict:
+        batch_size = len(batch[DataKey.IMG])
+        batch_log_dict = None
+        for x, spacing in zip(batch[DataKey.IMG], batch[DataKey.SPACING]):
+            x_rec, quant_out = self(x[None], spacing[None])
+            loss, disc_loss, log_dict = self.loss(
+                x, x_rec, spacing, quant_out.loss, self.global_step,
+                adaptive_weight_ref=self.decoder.conv_out.weight,
+            )
+            if self.training:
+                self.manual_backward(loss / batch_size)
+                self.manual_backward(disc_loss / batch_size)
+            if batch_log_dict is None:
+                batch_log_dict = log_dict
+            else:
+                for k, v in log_dict.items():
+                    batch_log_dict[k] += v
+        for k in batch_log_dict:
+            batch_log_dict[k] /= batch_size
+        return batch_log_dict
+
+    def training_step(self, batch: dict, *args, **kwargs):
         optimizer, disc_optimizer = self.optimizers()
         optimizer.zero_grad()
-        self.manual_backward(loss)
+        disc_optimizer.zero_grad()
+        if self.quantize.mode == 'gumbel':
+            self.quantize.adjust_temperature(self.global_step)
+        batch_log_dict = self.forward_batch(batch)
         optimizer.step()
-        self.manual_backward(disc_loss)
         disc_optimizer.step()
-        self.log_dict_split(log_dict, 'train')
-        return x_rec, log_dict
+        self.log_dict_split(batch_log_dict, 'train')
 
-    def validation_step(self, batch: dict[str, torch.Tensor], *args, **kwargs):
-        x = batch[DataKey.IMG]
-        spacing = batch[DataKey.SPACING]
-        x_rec, quant_out = self(x, spacing)
-        loss, disc_loss, log_dict = self.loss(x, x_rec, spacing, quant_out.loss)
-        self.log_dict_split(log_dict, 'val')
+    def validation_step(self, batch: dict, *args, **kwargs):
+        batch_log_dict = self.forward_batch(batch)
+        self.log_dict_split(batch_log_dict, 'val')
 
     def configure_optimizers(self):
         optimizer = create_optimizer(

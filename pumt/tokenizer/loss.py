@@ -148,6 +148,8 @@ class VQGANLoss(nn.Module):
         x = ensure_rgb(x, self.disc_force_rgb)
         x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
         # generator part
+        if self.training and torch.is_grad_enabled():
+            self.discriminator.requires_grad_(False)
         score_fake = self.discriminator(x_rec, spacing)
         gan_loss = -score_fake.mean()
         if self.training:
@@ -160,6 +162,8 @@ class VQGANLoss(nn.Module):
         loss = vq_loss + gan_weight * gan_loss
 
         # discriminator part
+        if self.training and torch.is_grad_enabled():
+            self.discriminator.requires_grad_(True)
         score_real = self.discriminator(x.detach(), spacing)
         score_fake = self.discriminator(x_rec.detach(), spacing)
         # hinge loss
