@@ -162,3 +162,4 @@ pre-trained
 test-images/
 pyrightconfig.json
 output
+scripts/_local
