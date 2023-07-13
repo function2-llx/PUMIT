@@ -12,14 +12,14 @@ from monai.data import MetaTensor
 class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
     def __init__(
         self,
-        max_num_tokens: int = 1024,
-        rotate_p: float = 0.3,
-        scale_x_p: float = 0.5,
-        scale_x: RangeTuple[float] = (0.75, 2),
-        scale_z_p: float = 0.3,
-        scale_z: RangeTuple[float] = (0.8, 1.25),
-        tx: RangeTuple[int] = (12, 16),
-        stride: int = 16,
+        max_num_tokens: int,
+        rotate_p: float,
+        scale_x_p: float,
+        scale_x: RangeTuple,
+        scale_z_p: float,
+        scale_z: RangeTuple,
+        tx: RangeTuple,
+        stride: int,
         lazy: bool = False,
     ):
         self.max_num_tokens = max_num_tokens
@@ -58,7 +58,6 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
             scale_z = self.R.uniform(*self.scale_z)
         else:
             scale_z = 1.
-        scale = torch.tensor((scale_z, scale_x, scale_x))
         # ratio of spacing z / spacing x
         rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
         dz = dx >> (int(rz).bit_length() - 1)
@@ -76,7 +75,7 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
                 mt.SpatialPad(sample_size, value=data['min']),
                 mt.RandSpatialCrop(sample_size, random_center=True, random_size=False),
                 mt.RandAffine(1., rotate_range, self.rotate_p),
-                mt.Affine(scale_params=scale, image_only=True),
+                mt.Affine(scale_params=(scale_z, scale_x, scale_x), image_only=True),
             ],
             lazy=self.lazy if lazy is None else lazy,
             apply_pending=False,

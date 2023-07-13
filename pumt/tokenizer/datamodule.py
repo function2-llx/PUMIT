@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cytoolz
 import pandas as pd
@@ -20,22 +20,21 @@ DATA_ROOT = Path('datasets-PUMT')
 @dataclass(kw_only=True)
 class DataLoaderConf:
     train_batch_size: int
-    val_batch_size: int = 16
+    val_batch_size: int = 4
     num_train_steps: int
-    num_workers: int
+    num_workers: int = 8
 
-@dataclass
+@dataclass(kw_only=True)
 class TransformConf:
-    train_num_tokens: int = 1024
-    val_num_tokens: int = 4096
+    train_num_tokens: int
+    val_num_tokens: int = 2048
     rotate_p: float = 0.3
-    scale_p: float = 0.3
-    scale_x_p: float = 0.5
-    train_scale_x: RangeTuple[float] = (0.75, 2)
-    val_scale_x: float = 1.5
     scale_z_p: float = 0.3
-    scale_z: RangeTuple[float] = (0.8, 1.25)
-    train_tx: RangeTuple[int] = (12, 16)
+    scale_z: RangeTuple = field(default_factory=lambda: RangeTuple(0.8, 1.25))
+    scale_x_p: float = 0.5
+    train_scale_x: RangeTuple
+    val_scale_x: float = 1.5
+    train_tx: RangeTuple
     val_tx: int = 16
     stride: int = 16
 
@@ -52,7 +51,7 @@ class TokenizerDataModule(LightningDataModule):
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
             dataset_weight = dataset_weights.get(dataset_name, 1.)
-            meta = pd.read_csv(dataset_dir / 'images-meta.csv', index_col='key')
+            meta = pd.read_csv(dataset_dir / 'images-meta.csv', dtype={'key': 'string'}).set_index('key')
             meta['weight'] *= dataset_weight
             meta[DataKey.IMG] = meta.index.map(lambda key: dataset_dir / 'data' / f'{key}.npz')
             for modality in meta['modality'].unique():
@@ -96,7 +95,7 @@ class TokenizerDataModule(LightningDataModule):
             ),
             collate_fn=cytoolz.identity,
             pin_memory=True,
-            persistent_workers=True,
+            persistent_workers=conf.num_workers > 0,
         )
 
     def val_transform(self) -> Callable:

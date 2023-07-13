@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from luolib.models.adaptive_resampling import AdaptiveDownsample, AdaptiveUpsample
+from luolib.models import adaptive_resampling as ar
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
 from luolib.models.utils import get_no_weight_decay_keys, split_by_weight_decay
 from luolib.utils import DataKey
@@ -140,7 +140,7 @@ class EncoderDownLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if downsample:
-            self.downsample = AdaptiveDownsample(out_channels, kernel_size=3)
+            self.downsample = ar.AdaptiveConvDownsample(out_channels, kernel_size=3)
         else:
             self.register_module('downsample', None)
 
@@ -168,6 +168,7 @@ class Encoder(nn.Module):
         z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
+        # num_interpolations: int = 0,
         attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
         dropout: float = 0.,
@@ -176,8 +177,8 @@ class Encoder(nn.Module):
         super().__init__()
         num_layers = len(layer_channels)
         attn_layer_ids = attn_layer_ids or []
-        # downsampling
         self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
+        # downsampling
         self.down = nn.ModuleList([
             EncoderDownLayer(
                 layer_channels[0] if i == 0 else layer_channels[i - 1],
@@ -239,13 +240,13 @@ class DecoderUpLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if upsample:
-            self.upsample = AdaptiveUpsample(out_channels)
+            self.upsample = ar.AdaptiveConvUpsample(out_channels)
         else:
             self.register_module('upsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: torch.Tensor, upsample_mask: torch.Tensor):
+    def forward(self, x: torch.Tensor, upsample_mask: torch.Tensor | None = None):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -314,7 +315,7 @@ class Decoder(nn.Module):
         x = self.mid(x)
 
         # upsampling
-        for up, upsample_mask in zip(reversed(self.up), reversed([torch.empty(0)] + upsample_masks[:-1])):
+        for up, upsample_mask in zip(reversed(self.up), reversed([None] + upsample_masks[:-1])):
             x = up(x, upsample_mask)
 
         # end
@@ -332,6 +333,7 @@ class VQGAN(LightningModule):
         vq_kwargs: dict,
         loss_kwargs: dict,
         force_rgb: bool = True,
+        num_pre_downsamples: int = 0,
         optimizer: dict | None = None,
         lr_scheduler_config: LRSchedulerConfig | None = None,
         disc_optimizer: dict | None = None,
@@ -345,6 +347,13 @@ class VQGAN(LightningModule):
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
         self.loss = VQGANLoss(**loss_kwargs)
         self.force_rgb = force_rgb
+        self.num_pre_downsamples = num_pre_downsamples
+        if num_pre_downsamples > 0:
+            self.pre_downsample = ar.AdaptiveInterpolateDownsample()
+            self.post_upsample = ar.AdaptiveUpsample()
+        else:
+            self.register_module('pre_downsample', None)
+            self.register_module('post_upsample', None)
 
         self.optimizer = optimizer
         self.lr_scheduler_config = lr_scheduler_config
@@ -355,26 +364,43 @@ class VQGAN(LightningModule):
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
             spacing = x.new_ones(x.shape[0], 3)
+        pre_downsample_masks = []
+        for _ in range(self.num_pre_downsamples):
+            x, spacing, mask = self.pre_downsample(x, spacing)
+            pre_downsample_masks.append(mask)
+        x = ensure_rgb(x, self.force_rgb)
         z, spacing, downsample_masks = self.encoder(x, spacing)
         z = self.quant_conv(z)
         quant_out = self.quantize(z)
-        return quant_out, downsample_masks
+        return quant_out, downsample_masks, pre_downsample_masks
 
-    def decode(self, z_q: torch.Tensor, upsample_masks: list[torch.Tensor]):
+    def decode(
+        self,
+        z_q: torch.Tensor,
+        upsample_masks: list[torch.Tensor],
+        post_upsample_masks: list[torch.Tensor],
+        to_gray: bool = False,
+    ):
         z_q = self.post_quant_conv(z_q)
         x_rec = self.decoder(z_q, upsample_masks)
+        if to_gray:
+            x_rec = rgb_to_gray(x_rec)
+        for post_upsample_mask in reversed(post_upsample_masks):
+            x_rec = self.post_upsample(x_rec, post_upsample_mask)
         return x_rec
 
     def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
-        quant_out, downsample_masks = self.encode(ensure_rgb(x, self.force_rgb), spacing)
-        x_rec = self.decode(quant_out.z_q, downsample_masks)
-        if self.force_rgb and x.shape[1] == 1:
-            x_rec = rgb_to_gray(x_rec)
-
+        quant_out, downsample_masks, pre_downsample_masks = self.encode(x, spacing)
+        x_rec = self.decode(
+            quant_out.z_q,
+            downsample_masks,
+            pre_downsample_masks,
+            self.force_rgb and x.shape[1] == 1,
+        )
         return x_rec, quant_out
 
-    def log_dict_split(self, data: dict, split: str):
-        self.log_dict({f'{split}/{k}': v for k, v in data.items()})
+    def log_dict_split(self, data: dict, split: str, batch_size: int | None = None):
+        self.log_dict({f'{split}/{k}': v for k, v in data.items()}, batch_size=batch_size, sync_dist=True)
 
     def forward_batch(self, batch: list[dict]) -> dict:
         batch_size = len(batch)
@@ -400,6 +426,15 @@ class VQGAN(LightningModule):
             batch_log_dict[k] /= batch_size
         return batch_log_dict
 
+    def on_train_batch_start(self, *args, **kwargs):
+        lr_scheduler, disc_lr_scheduler = self.lr_schedulers()
+        lr_scheduler.step_update(self.global_step)
+        disc_lr_scheduler.step_update(self.global_step)
+
+    def lr_scheduler_step(self, *args, **kwargs) -> None:
+        # make lightning happy with the incompatible API
+        pass
+
     def training_step(self, batch: list[dict], *args, **kwargs):
         optimizer, disc_optimizer = self.optimizers()
         optimizer.zero_grad()
@@ -409,11 +444,11 @@ class VQGAN(LightningModule):
         batch_log_dict = self.forward_batch(batch)
         optimizer.step()
         disc_optimizer.step()
-        self.log_dict_split(batch_log_dict, 'train')
+        self.log_dict_split(batch_log_dict, 'train', len(batch))
 
     def validation_step(self, batch: list[dict], *args, **kwargs):
         batch_log_dict = self.forward_batch(batch)
-        self.log_dict_split(batch_log_dict, 'val')
+        self.log_dict_split(batch_log_dict, 'val', len(batch))
 
     def configure_optimizers(self):
         no_weight_decay_keys = get_no_weight_decay_keys(self)
@@ -438,19 +473,14 @@ class VQGAN(LightningModule):
             ),
             self.disc_optimizer,
         )
+        from timm.scheduler.scheduler import Scheduler as TIMMScheduler
         lr_scheduler_config = copy(self.lr_scheduler_config)
         lr_scheduler_config.scheduler = instantiate_class(optimizer, lr_scheduler_config.scheduler)
+        assert isinstance(lr_scheduler_config.scheduler, TIMMScheduler)
         disc_lr_scheduler_config = copy(self.disc_lr_scheduler_config)
         disc_lr_scheduler_config.scheduler = instantiate_class(disc_optimizer, disc_lr_scheduler_config.scheduler)
-
+        assert isinstance(disc_lr_scheduler_config.scheduler, TIMMScheduler)
         return [optimizer, disc_optimizer], [vars(lr_scheduler_config), vars(disc_lr_scheduler_config)]
-
-    def lr_scheduler_step(self, scheduler, metric: Any):
-        from timm.scheduler.scheduler import Scheduler as TIMMScheduler
-        if isinstance(scheduler, TIMMScheduler):
-            scheduler.step_update(self.global_step)
-        else:
-            return super().lr_scheduler_step(scheduler, metric)
 
 #     def log_images(self, batch, only_inputs=False, plot_ema=False, **kwargs):
 #         log = dict()

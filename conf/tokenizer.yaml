@@ -7,7 +7,7 @@ model:
     ed_kwargs:
       in_channels: 3
       z_channels: ${..z_channels}
-      layer_channels: [128, 128, 128, 256, 512]
+      layer_channels: [128, 128, 256, 512]
       num_res_blocks: 2
     vq_kwargs:
       num_embeddings: 8192
@@ -16,6 +16,8 @@ model:
     loss_kwargs:
       in_channels: ${..ed_kwargs.in_channels}
       gan_start_step: 1000
+      quant_weight: 1e-2
+    num_pre_downsamples: 1
     optimizer:
       class_path: torch.optim.AdamW
       init_args:
