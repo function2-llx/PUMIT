@@ -1,19 +1,21 @@
 from collections import OrderedDict
 from collections.abc import Sequence
+from copy import copy
+from typing import Any
 
 import cytoolz
 import numpy as np
-import pytorch_lightning as pl
+from lightning import LightningModule
+from lightning.pytorch.cli import instantiate_class
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from luolib.conf import OptimizerConf, SchedulerConf
 from luolib.models.adaptive_resampling import AdaptiveDownsample, AdaptiveUpsample
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
-from luolib.optim import create_optimizer
-from luolib.scheduler import create_scheduler
+from luolib.models.utils import get_no_weight_decay_keys, split_by_weight_decay
 from luolib.utils import DataKey
+from luolib.types import LRSchedulerConfig
 
 from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
@@ -166,14 +168,14 @@ class Encoder(nn.Module):
         z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
-        attn_layer_ids: list[int],
+        attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
     ):
         super().__init__()
         num_layers = len(layer_channels)
-
+        attn_layer_ids = attn_layer_ids or []
         # downsampling
         self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
         self.down = nn.ModuleList([
@@ -263,13 +265,14 @@ class Decoder(nn.Module):
         z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
-        attn_layer_ids: Sequence[int],
+        attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
         dropout: float = 0.0,
         gradient_checkpointing: bool = False,
     ):
         super().__init__()
         num_layers = len(layer_channels)
+        attn_layer_ids = attn_layer_ids or []
         last_channels = layer_channels[-1]
 
         # z to last feature map channels
@@ -320,31 +323,33 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-class VQGAN(pl.LightningModule):
+class VQGAN(LightningModule):
     def __init__(
         self,
         z_channels: int,
         embedding_dim: int,
-        ed_conf: dict,
-        vq_conf: dict,
-        loss_conf: dict,
+        ed_kwargs: dict,
+        vq_kwargs: dict,
+        loss_kwargs: dict,
         force_rgb: bool = True,
-        optim_conf: OptimizerConf | None = None,
-        disc_optim_conf: OptimizerConf | None = None,
-        scheduler_conf: SchedulerConf | None = None,
+        optimizer: dict | None = None,
+        lr_scheduler_config: LRSchedulerConfig | None = None,
+        disc_optimizer: dict | None = None,
+        disc_lr_scheduler_config: LRSchedulerConfig | None = None,
     ):
         super().__init__()
-        self.encoder = Encoder(**ed_conf)
-        self.decoder = Decoder(**ed_conf)
-        self.quantize = VectorQuantizer(**vq_conf)
+        self.encoder = Encoder(**ed_kwargs)
+        self.decoder = Decoder(**ed_kwargs)
+        self.quantize = VectorQuantizer(**vq_kwargs)
         self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
-        self.loss = VQGANLoss(**loss_conf)
+        self.loss = VQGANLoss(**loss_kwargs)
         self.force_rgb = force_rgb
 
-        self.optim_conf = optim_conf
-        self.disc_optim_conf = disc_optim_conf
-        self.scheduler_conf = scheduler_conf
+        self.optimizer = optimizer
+        self.lr_scheduler_config = lr_scheduler_config
+        self.disc_optimizer = disc_optimizer
+        self.disc_lr_scheduler_config = disc_lr_scheduler_config
         self.automatic_optimization = False
 
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
@@ -371,11 +376,14 @@ class VQGAN(pl.LightningModule):
     def log_dict_split(self, data: dict, split: str):
         self.log_dict({f'{split}/{k}': v for k, v in data.items()})
 
-    def forward_batch(self, batch: dict) -> dict:
-        batch_size = len(batch[DataKey.IMG])
+    def forward_batch(self, batch: list[dict]) -> dict:
+        batch_size = len(batch)
         batch_log_dict = None
-        for x, spacing in zip(batch[DataKey.IMG], batch[DataKey.SPACING]):
-            x_rec, quant_out = self(x[None], spacing[None])
+        for sample in batch:
+            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
+            x = x[None]
+            spacing = spacing[None]
+            x_rec, quant_out = self(x, spacing)
             loss, disc_loss, log_dict = self.loss(
                 x, x_rec, spacing, quant_out.loss, self.global_step,
                 adaptive_weight_ref=self.decoder.conv_out.weight,
@@ -392,32 +400,57 @@ class VQGAN(pl.LightningModule):
             batch_log_dict[k] /= batch_size
         return batch_log_dict
 
-    def training_step(self, batch: dict, *args, **kwargs):
+    def training_step(self, batch: list[dict], *args, **kwargs):
         optimizer, disc_optimizer = self.optimizers()
         optimizer.zero_grad()
         disc_optimizer.zero_grad()
-        if self.quantize.mode == 'gumbel':
+        if self.quantize.mode == 'gumbel' and not self.quantize.hard_gumbel:
             self.quantize.adjust_temperature(self.global_step)
         batch_log_dict = self.forward_batch(batch)
         optimizer.step()
         disc_optimizer.step()
         self.log_dict_split(batch_log_dict, 'train')
 
-    def validation_step(self, batch: dict, *args, **kwargs):
+    def validation_step(self, batch: list[dict], *args, **kwargs):
         batch_log_dict = self.forward_batch(batch)
         self.log_dict_split(batch_log_dict, 'val')
 
     def configure_optimizers(self):
-        optimizer = create_optimizer(
-            self.optim_conf,
-            cytoolz.concat([
-                child.parameters()
-                for name, child in self.named_children() if name != 'loss'
-            ]),
+        no_weight_decay_keys = get_no_weight_decay_keys(self)
+        optimizer = instantiate_class(
+            split_by_weight_decay(
+                [
+                    (name, param)
+                    for child_name, child in self.named_children() if child_name != 'loss'
+                    for name, param in child.named_parameters(prefix=child_name) if param.requires_grad
+                ],
+                no_weight_decay_keys
+            ),
+            self.optimizer,
         )
-        disc_optimizer = create_optimizer(self.disc_optim_conf, self.loss.parameters())
-        scheduler = create_scheduler(self.scheduler_conf, optimizer)
-        return [optimizer, disc_optimizer], scheduler
+        disc_optimizer = instantiate_class(
+            split_by_weight_decay(
+                [
+                    (name, param)
+                    for name, param in self.loss.named_parameters(prefix='loss') if param.requires_grad
+                ],
+                no_weight_decay_keys,
+            ),
+            self.disc_optimizer,
+        )
+        lr_scheduler_config = copy(self.lr_scheduler_config)
+        lr_scheduler_config.scheduler = instantiate_class(optimizer, lr_scheduler_config.scheduler)
+        disc_lr_scheduler_config = copy(self.disc_lr_scheduler_config)
+        disc_lr_scheduler_config.scheduler = instantiate_class(disc_optimizer, disc_lr_scheduler_config.scheduler)
+
+        return [optimizer, disc_optimizer], [vars(lr_scheduler_config), vars(disc_lr_scheduler_config)]
+
+    def lr_scheduler_step(self, scheduler, metric: Any):
+        from timm.scheduler.scheduler import Scheduler as TIMMScheduler
+        if isinstance(scheduler, TIMMScheduler):
+            scheduler.step_update(self.global_step)
+        else:
+            return super().lr_scheduler_step(scheduler, metric)
 
 #     def log_images(self, batch, only_inputs=False, plot_ema=False, **kwargs):
 #         log = dict()

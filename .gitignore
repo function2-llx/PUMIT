@@ -161,3 +161,4 @@ pre-trained
 *.nii.gz
 test-images/
 pyrightconfig.json
+output

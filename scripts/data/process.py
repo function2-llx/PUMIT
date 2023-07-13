@@ -31,6 +31,8 @@ class ImageFile:
 
 class DatasetProcessor(ABC):
     name: str
+    max_workers: int = 16
+    chunksize: int = 1
 
     @property
     def dataset_root(self):
@@ -52,7 +54,7 @@ class DatasetProcessor(ABC):
     def get_cropper(self) -> Callable[[MetaTensor], MetaTensor]:
         pass
 
-    def process(self, ncols: int = 80, max_workers: int = 16, **kwargs):
+    def process(self):
         files = self.get_image_files()
         if len(files) == 0:
             return
@@ -69,7 +71,7 @@ class DatasetProcessor(ABC):
         if len(files) == 0:
             remained_meta = pd.DataFrame()
         else:
-            results = process_map(self.process_file, files, max_workers=max_workers, ncols=ncols, **kwargs)
+            results = process_map(self.process_file, files, max_workers=self.max_workers, chunksize=self.chunksize, ncols=80)
             remained_meta = pd.DataFrame.from_records(cytoolz.concat(results), index='key')
         meta = pd.concat([old_meta, remained_meta])
         meta.to_csv(images_meta_path)
@@ -109,8 +111,25 @@ class DatasetProcessor(ABC):
                 for i, modality in enumerate(file.modality)
             ]
 
+    def adjust_orientation(self, img: MetaTensor):
+        if abs(img.pixdim[1] - img.pixdim[2]) > 1e-2:
+            codes = ['RAS', 'ASR', 'SRA']
+            diff = np.empty(len(codes))
+            for i, code in enumerate(codes):
+                orientation = mt.Orientation(code)
+                img = orientation(img)
+                diff[i] = abs(img.pixdim[1] - img.pixdim[2])
+            code = codes[diff.argmin()]
+            return mt.Orientation(code)(img)
+        else:
+            return img
+
     def process_image(self, img: MetaTensor, key: str, modality: str | dict, cropper: Callable[[MetaTensor], MetaTensor], weight: float) -> dict:
+        img = self.adjust_orientation(img)
         cropped = cropper(img)
+        if (r := 512 / min(cropped.shape[2:])) < 1:
+            resizer = mt.Resize((-1, round(cropped.shape[2] * r), round(cropped.shape[3] * r)), anti_aliasing=True)
+            cropped = resizer(cropped)
         save_path = self.output_root / 'data' / f'{key}.npz'
         np.savez(save_path, array=cropped.cpu().numpy(), affine=cropped.affine)
         cropped_f = cropped.float()
@@ -132,20 +151,21 @@ class DatasetProcessor(ABC):
             'mean': cropped_f.mean().item(),
             'median': cropped_f.median().item(),
             'std': cropped_f.std().item(),
-            'max': cropped_f.max().item(),
             'min': cropped_f.min().item(),
             'p0.5': mt.percentile(cropped_f, 0.5).item(),
+            'max': cropped_f.max().item(),
             'p99.5': mt.percentile(cropped_f, 99.5).item(),
             'weight': weight,
         }
 
 class Default3DLoaderMixin:
     reader = None
+    orientation = 'RAS'
 
     def get_loader(self) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
             mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
-            mt.Orientation('RAS'),
+            mt.Orientation(self.orientation),
             MetaTensor.contiguous,
             MetaTensor.cuda,
         ])
@@ -217,7 +237,7 @@ class PercentileCropperMixin(ValueBasedCropper):
                 ret[i] = mt.percentile(c[c > min_v], self.min_p)
             else:
                 ret[i] = mt.percentile(c, self.min_p)
-            
+
         return ret
 
 class ConstantCropperMixin(ValueBasedCropper):
@@ -266,6 +286,10 @@ class AMOS22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProce
 
 class BrainPTM2021Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'BrainPTM-2021'
+    orientation = 'ASR'
+
+    def adjust_orientation(self, img: MetaTensor):
+        return img
 
     def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
         if file.modality != 'MRI/DWI':
@@ -288,6 +312,12 @@ class BrainPTM2021Processor(Default3DLoaderMixin, PercentileCropperMixin, Datase
         return ret
 
 class BraTS2023SegmentationProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    orientation = 'SAR'
+
+    @property
+    def output_root(self):
+        return PROCESSED_ROOT / f"BraTS2023-{self.name.split('-')[-1]}"
+
     def get_image_files(self) -> Sequence[ImageFile]:
         modality_map = {
             't1c': 'MRI/T1c',
@@ -374,9 +404,6 @@ class CheXpertProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetPr
     def dataset_root(self):
         return DATASETS_ROOT / self.name / 'chexpertchestxrays-u20210408'
 
-    def process(self, *args, **kwargs):
-        return super().process(*args, chunksize=10, **kwargs)
-    
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
         for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
@@ -464,6 +491,7 @@ class EPISURGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProc
 
 class FLARE22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'FLARE22'
+    max_workers = 6
 
     def get_image_files(self):
         image_folders = [
@@ -698,10 +726,14 @@ class MRSpineSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetP
         suffix = '.nii.gz'
         return [
             ImageFile(path.name[:-len(suffix)], 'MRI/T2', path)
-            for path in self.dataset_root.rglob(f'*{suffix}')
+            for path in self.dataset_root.glob(f'*/MR/*{suffix}')
         ]
 
 class MSDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    @property
+    def output_root(self):
+        return PROCESSED_ROOT / self.name.replace('/', '-')
+
     def get_modality(self) -> list[str]:
         import json
         meta = json.loads(Path(self.dataset_root / 'dataset.json').read_bytes())
@@ -779,15 +811,13 @@ class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor
         ]
 
 class NIHChestXRayProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
-    name = 'NIH Chest X-ray'
+    name = 'NIHChestX-ray'
     assert_gray_scale = True
+    chunksize = 10
 
     @property
     def dataset_root(self):
         return DATASETS_ROOT / self.name / 'CXR8'
-
-    def process(self, *args, **kwargs):
-        return super().process(*args, chunksize=10, **kwargs)
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [

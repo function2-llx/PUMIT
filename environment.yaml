@@ -12,7 +12,8 @@ dependencies:
   - pytorch::pytorch-cuda=11.8
   - pytorch::torchvision
   - einops
-  - pytorch-lightning
+  - lightning
+  - pydantic<2  # https://github.com/Lightning-AI/lightning/issues/18027
   - torchmetrics
   - transformers
   - timm
@@ -30,5 +31,5 @@ dependencies:
   - pip:
     - cytoolz
     - pynrrd
-    - openmim # mim install mmcv
+    - jsonargparse[signatures]  # for lightning CLI
     - -e third-party/MONAI

@@ -81,7 +81,7 @@ class VQGANLoss(nn.Module):
             case _:
                 raise ValueError
         self.perceptual_loss = LPIPS().eval()
-        print(f'{self.__class__.__name__}: Running with LPIPS.')
+        print(f'{self.__class__.__name__}: running with LPIPS')
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
         self.gan_start_step = gan_start_step
@@ -89,7 +89,7 @@ class VQGANLoss(nn.Module):
 
         self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
         self.disc_force_rgb = disc_force_rgb
-        print(f'{self.__class__.__name__} running with hinge W-GAN loss.')
+        print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):

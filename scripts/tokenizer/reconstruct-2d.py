@@ -9,11 +9,11 @@ from PIL import Image
 from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
-from luolib.conf.utils import instantiate_from_conf
+from luolib.conf.utils import instantiate
 from luolib.models import load_ckpt
 from luolib.utils import DataKey
 
-from pumt.tokenizer.vqgan import VQGAN
+from pumt.tokenizer.model import VQGAN
 
 src = Path('test-images/Image_02L.jpg')
 
@@ -41,7 +41,7 @@ def main():
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
     print(x.shape)
-    model: VQGAN = instantiate_from_conf(args.conf_path).cuda().eval()
+    model: VQGAN = instantiate(args.conf_path).cuda().eval()
     load_ckpt(model, args.ckpt_path)
     spacing = torch.tensor([[1e6, 1, 1]], device='cuda')
     with torch.no_grad():

@@ -5,12 +5,12 @@ import nibabel as nib
 import torch
 import pytorch_lightning as pl
 
-from luolib.conf.utils import instantiate_from_conf
+from luolib.conf.utils import instantiate
 from luolib.models import load_ckpt
 from luolib.utils import DataKey
 from monai import transforms as mt
 
-from pumt.tokenizer.vqgan import VQGAN
+from pumt.tokenizer.model import VQGAN
 
 src = Path('test-images/amos_0065.nii.gz')
 
@@ -44,7 +44,7 @@ def main():
     x = img.as_tensor().cuda()[None] * 2 - 1
     print(x.shape, spacing)
     print(affine)
-    model: VQGAN = instantiate_from_conf(args.conf_path).cuda().eval()
+    model: VQGAN = instantiate(args.conf_path).cuda().eval()
     load_ckpt(model, args.ckpt_path)
     with torch.no_grad():
         x_rec, quant_out = model.forward(x, spacing)

@@ -7,10 +7,10 @@ import torch
 from torch.nn import functional as nnf
 from torchvision.utils import save_image
 
-from luolib.conf.utils import instantiate_from_conf
+from luolib.conf.utils import instantiate
 from luolib.models import load_ckpt
 
-from pumt.tokenizer.vqgan import VQGAN
+from pumt.tokenizer.model import VQGAN
 
 def main():
     parser = ArgumentParser()
@@ -31,7 +31,7 @@ def main():
 
     conf = OmegaConf.load(args.conf_path)
     conf['kwargs']['in_channels'] = 3
-    model: VQGAN = instantiate_from_conf(conf).cuda().eval()
+    model: VQGAN = instantiate(conf).cuda().eval()
     load_ckpt(model, args.ckpt_path)
     z = einops.rearrange(model.quantize.embedding.weight[:args.nr * args.nc], 'n c -> n c 1 1 1')
     with torch.no_grad():
