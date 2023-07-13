@@ -55,11 +55,19 @@ data:
       CheXpert: 0.1
       NIHChestX-ray: 0.1
     dl_conf:
-      train_batch_size: 16
+      train_batch_size: 2
       num_train_steps: ${trainer.max_steps}
+    trans_conf:
+      train_num_tokens: 1024
+      train_scale_x:
+        min: 0.75
+        max: 2.0
+      train_tx:
+        min: 12
+        max: 16
 trainer:
   precision: 16-mixed
-  logger: 
+  logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
       name: tokenizer
