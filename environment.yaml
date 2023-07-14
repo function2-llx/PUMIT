@@ -1,37 +1,34 @@
 channels:
-  - conda-forge
-  - pytorch
-  - nvidia
-  - defaults
+- conda-forge
+- pytorch
+- nvidia
+- defaults
 dependencies:
-  - python=3.11
-  - omegaconf
-  - numpy
-  - pytorch::pytorch
-  - llvm-openmp<16  # https://github.com/pytorch/pytorch/issues/99625
-  - pytorch::pytorch-cuda=11.8
-  - pytorch::torchvision
-  - einops
-  - pydantic<2  # https://github.com/Lightning-AI/lightning/issues/18027
-  - torchmetrics
-  - transformers
-  - timm
-  - wandb
-  - pandas
-  - scipy
-  - matplotlib
-  - openpyxl
-  - nibabel
-  - itk
-  - pydicom
-  - gdcm
+- python=3.11
+- omegaconf
+- numpy
+- pytorch::pytorch
+- llvm-openmp<16  # https://github.com/pytorch/pytorch/issues/99625
+- pytorch::pytorch-cuda=11.8
+- pytorch::torchvision
+- einops
+- pydantic<2  # https://github.com/Lightning-AI/lightning/issues/18027
+- torchmetrics
+- transformers
+- timm
+- wandb
+- pandas
+- scipy
+- matplotlib
+- openpyxl
+- nibabel
+- itk
+- pydicom
+- gdcm
 
-  - pip
-  - pip:
-    - cytoolz
-    - pynrrd
-    - lightning==2.0.5  # conda-forge build fails
-    - jsonargparse[signatures]  # for lightning CLI
-    - -e --no-build-isolation third-party/MONAI
-variables:
-  BUILD_MONAI: 1
+- pip
+- pip:
+  - cytoolz
+  - pynrrd
+  - lightning==2.0.5  # conda-forge build fails
+  - jsonargparse[signatures]  # for lightning CLI
