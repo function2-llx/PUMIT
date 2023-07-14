@@ -32,4 +32,6 @@ dependencies:
     - pynrrd
     - lightning==2.0.5  # conda-forge build fails
     - jsonargparse[signatures]  # for lightning CLI
-    - -e third-party/MONAI
+    - -e --no-build-isolation third-party/MONAI
+variables:
+  MONAI_BUILD: 1
