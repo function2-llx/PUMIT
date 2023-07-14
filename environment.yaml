@@ -34,4 +34,4 @@ dependencies:
     - jsonargparse[signatures]  # for lightning CLI
     - -e --no-build-isolation third-party/MONAI
 variables:
-  MONAI_BUILD: 1
+  BUILD_MONAI: 1
