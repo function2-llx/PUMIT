@@ -26,16 +26,16 @@ class DataLoaderConf:
 
 @dataclass(kw_only=True)
 class TransformConf:
-    train_num_tokens: int
-    val_num_tokens: int = 2048
+    train_tz: int
+    val_tz: int = 6
+    train_tx: RangeTuple
+    val_tx: int = 16
     rotate_p: float = 0.3
     scale_z_p: float = 0.3
     scale_z: RangeTuple = field(default_factory=lambda: RangeTuple(0.8, 1.25))
     scale_x_p: float = 0.5
     train_scale_x: RangeTuple
     val_scale_x: float = 1.5
-    train_tx: RangeTuple
-    val_tx: int = 16
     stride: int = 16
 
 class TokenizerDataModule(LightningDataModule):
@@ -68,13 +68,13 @@ class TokenizerDataModule(LightningDataModule):
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
                 RandAffineCropD(
-                    trans_conf.train_num_tokens,
+                    trans_conf.train_tz,
+                    trans_conf.train_tx,
                     trans_conf.rotate_p,
                     trans_conf.scale_x_p,
                     trans_conf.train_scale_x,
                     trans_conf.scale_z_p,
                     trans_conf.scale_z,
-                    trans_conf.train_tx,
                     trans_conf.stride,
                 ),
                 NormalizeIntensityD(),
@@ -91,7 +91,7 @@ class TokenizerDataModule(LightningDataModule):
             batch_size=conf.train_batch_size,
             sampler=WeightedRandomSampler(
                 self.train_data['weight'].to_numpy(),
-                conf.num_train_steps * conf.train_batch_size,
+                conf.num_train_steps * conf.train_batch_size * self.trainer.num_devices,
             ),
             collate_fn=cytoolz.identity,
             pin_memory=True,
@@ -104,9 +104,9 @@ class TokenizerDataModule(LightningDataModule):
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
                 CenterScaleCropD(
-                    trans_conf.val_num_tokens,
-                    trans_conf.val_scale_x,
+                    trans_conf.val_tz,
                     trans_conf.val_tx,
+                    trans_conf.val_scale_x,
                     trans_conf.stride,
                 ),
                 NormalizeIntensityD(),

@@ -55,6 +55,9 @@ def calculate_adaptive_weight(
     weight.clamp_(minv, maxv)
     return weight
 
+def hinge_loss(score_real: torch.Tensor, score_fake: torch.Tensor):
+    return (1 - score_real).relu().mean() + (1 + score_fake).relu().mean()
+
 class VQGANLoss(nn.Module):
     def __init__(
         self,
@@ -148,7 +151,8 @@ class VQGANLoss(nn.Module):
         x = ensure_rgb(x, self.disc_force_rgb)
         x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
         # generator part
-        if self.training and torch.is_grad_enabled():
+        if self.training:
+            self.discriminator.eval()
             self.discriminator.requires_grad_(False)
         score_fake = self.discriminator(x_rec, spacing)
         gan_loss = -score_fake.mean()
@@ -162,12 +166,13 @@ class VQGANLoss(nn.Module):
         loss = vq_loss + gan_weight * gan_loss
 
         # discriminator part
-        if self.training and torch.is_grad_enabled():
-            self.discriminator.requires_grad_(True)
+        if self.training:
+            self.discriminator.train()
+            if torch.is_grad_enabled():
+                self.discriminator.requires_grad_(True)
         score_real = self.discriminator(x.detach(), spacing)
         score_fake = self.discriminator(x_rec.detach(), spacing)
-        # hinge loss
-        disc_loss = 0.5 * ((1 - score_real).relu().mean() + (1 + score_fake).relu().mean())
+        disc_loss = 0.5 * hinge_loss(score_real, score_fake)
         return loss, disc_loss, {
             'loss': loss,
             'rec_loss': rec_loss,

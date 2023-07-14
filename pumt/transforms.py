@@ -2,7 +2,6 @@ import math
 from collections.abc import Hashable, Mapping
 
 import numpy as np
-import torch
 
 from luolib.types import RangeTuple
 from luolib.utils import DataKey
@@ -12,23 +11,23 @@ from monai.data import MetaTensor
 class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
     def __init__(
         self,
-        max_num_tokens: int,
+        tz: int,
+        tx: RangeTuple,
         rotate_p: float,
         scale_x_p: float,
         scale_x: RangeTuple,
         scale_z_p: float,
         scale_z: RangeTuple,
-        tx: RangeTuple,
         stride: int,
         lazy: bool = False,
     ):
-        self.max_num_tokens = max_num_tokens
+        self.tz = tz
+        self.tx = tx
         self.rotate_p = rotate_p
-        self.scale_x_p = scale_x_p
-        self.scale_x = scale_x
         self.scale_z_p = scale_z_p
         self.scale_z = scale_z
-        self.tx = tx
+        self.scale_x_p = scale_x_p
+        self.scale_x = scale_x
         self.stride = stride
         mt.LazyTransform.__init__(self, lazy)
 
@@ -61,11 +60,7 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
         # ratio of spacing z / spacing x
         rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
         dz = dx >> (int(rz).bit_length() - 1)
-        tz = min(
-            tx,
-            math.ceil(self.max_num_tokens / tx ** 2),
-            math.ceil(img.shape[1] / (scale_z * dz)),
-        )
+        tz = min(self.tz, tx, math.ceil(img.shape[1] / (scale_z * dz)))
         sample_size = (tz * dz, size_x, size_x)
         # following nnU-Net
         rotate_x_range = 0. if aniso_z else np.pi / 6
@@ -86,15 +81,15 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
 class CenterScaleCropD(mt.LazyTransform):
     def __init__(
         self,
-        max_num_tokens: int = 4096,
-        scale_x: float = 1.5,
-        tx: int = 16,
-        stride: int = 16,
+        tz: int,
+        tx: int,
+        scale_x: float,
+        stride: int,
         lazy: bool = False,
     ):
-        self.max_num_tokens = max_num_tokens
-        self.scale_x = scale_x
+        self.tz = tz
         self.tx = tx
+        self.scale_x = scale_x
         self.stride = stride
         mt.LazyTransform.__init__(self, lazy)
 
@@ -108,11 +103,7 @@ class CenterScaleCropD(mt.LazyTransform):
         scale_x = min(self.scale_x, origin_size_x / size_x)
         rz = np.clip(img.pixdim[0] / (min(img.pixdim[1:]) * scale_x), 1, dx)
         dz = dx >> int(rz).bit_length() - 1
-        tz = min(
-            tx,
-            math.ceil(self.max_num_tokens / tx ** 2),
-            math.ceil(img.shape[1] / dz),
-        )
+        tz = min(self.tz, tx, math.ceil(img.shape[1] / dz))
         sample_size = (tz * dz, size_x, size_x)
         cropper = mt.Compose(
             [

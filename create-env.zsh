@@ -1,6 +1,5 @@
 #! /bin/zsh
 
-
 mamba env create -n pumt -f environment.yaml
 mamba activate pumt
 local env_file=$CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
