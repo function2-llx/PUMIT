@@ -457,6 +457,9 @@ class VQGAN(LightningModule):
             if self.global_step % config.frequency == 0:
                 config.scheduler.step_update(self.global_step)
 
+    def configure_gradient_clipping(self, optimizer, *args, **kwargs) -> None:
+        self.clip_gradients(optimizer, 1, 'norm')
+
     def training_step(self, batch: list[dict], *args, **kwargs):
         optimizer, disc_optimizer = self.optimizers()
         optimizer.zero_grad()
@@ -465,6 +468,7 @@ class VQGAN(LightningModule):
             self.quantize.adjust_temperature(self.global_step, self.trainer.max_steps)
         batch_size = len(batch)
         batch_log_dict = None
+        batch_loss, batch_disc_loss = None, None
         for sample in batch:
             x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
             x = x[None]
@@ -473,17 +477,25 @@ class VQGAN(LightningModule):
             x_rec, quant_out = self(x, spacing)
             self.loss.adjust_gan_weight(self.global_step)
             loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
-            self.manual_backward(loss / batch_size)
+            if batch_loss is None:
+                batch_loss = loss
+            else:
+                batch_loss += loss
             self.untoggle_optimizer(optimizer)
             self.toggle_optimizer(disc_optimizer)
             disc_loss = self.loss.forward_disc(x, x_rec, spacing, log_dict)
-            self.manual_backward(disc_loss / batch_size)
+            if batch_disc_loss is None:
+                batch_disc_loss = disc_loss
+            else:
+                batch_disc_loss += disc_loss
             self.untoggle_optimizer(disc_optimizer)
             if batch_log_dict is None:
                 batch_log_dict = log_dict
             else:
                 for k, v in log_dict.items():
                     batch_log_dict[k] += v
+        self.manual_backward(batch_loss)
+        self.manual_backward(batch_disc_loss)
         optimizer.step()
         disc_optimizer.step()
         for k in batch_log_dict:

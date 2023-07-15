@@ -29,7 +29,7 @@ class TransformConf:
     train_tz: int
     val_tz: int = 4
     train_tx: RangeTuple
-    val_tx: int = 16
+    val_tx: int = 12
     rotate_p: float = 0.3
     scale_z_p: float = 0.3
     scale_z: RangeTuple = field(default_factory=lambda: RangeTuple(0.8, 1.25))

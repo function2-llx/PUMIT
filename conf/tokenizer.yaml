@@ -15,8 +15,8 @@ model:
       mode: soft
     loss_kwargs:
       in_channels: ${..ed_kwargs.in_channels}
-      gan_warmup_steps: 1000
-      quant_weight: 5e-2
+      gan_warmup_steps: 10000
+      quant_weight: 1e-3
     num_pre_downsamples: 1
     optimizer:
       class_path: torch.optim.AdamW
@@ -26,7 +26,7 @@ model:
     disc_optimizer:
       class_path: torch.optim.AdamW
       init_args:
-        lr: 1e-4
+        lr: 1e-3
         weight_decay: 5e-2
     lr_scheduler_config:
       scheduler:
