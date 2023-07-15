@@ -48,6 +48,7 @@ model:
           warmup_prefix: true
       interval: step
       frequency: 100
+    ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
 data:
   class_path: pumt.tokenizer.TokenizerDataModule
   init_args:

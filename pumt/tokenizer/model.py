@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from collections.abc import Sequence
 from copy import copy
+from pathlib import Path
 
 import cytoolz
 import numpy as np
@@ -12,7 +13,7 @@ from torch.utils.checkpoint import checkpoint
 
 from luolib.models import adaptive_resampling as ar
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
-from luolib.models.utils import get_no_weight_decay_keys, split_by_weight_decay
+from luolib.models.utils import get_no_weight_decay_keys, load_ckpt, split_by_weight_decay
 from luolib.utils import DataKey
 from luolib.types import LRSchedulerConfig
 
@@ -336,6 +337,7 @@ class VQGAN(LightningModule):
         lr_scheduler_config: LRSchedulerConfig | None = None,
         disc_optimizer: dict | None = None,
         disc_lr_scheduler_config: LRSchedulerConfig | None = None,
+        ckpt_path: Path | None = None,
     ):
         super().__init__()
         self.encoder = Encoder(**ed_kwargs)
@@ -357,6 +359,7 @@ class VQGAN(LightningModule):
         self.lr_scheduler_config = lr_scheduler_config
         self.disc_optimizer = disc_optimizer
         self.disc_lr_scheduler_config = disc_lr_scheduler_config
+        load_ckpt(self, ckpt_path)
         self.automatic_optimization = False
 
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
