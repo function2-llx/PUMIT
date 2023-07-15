@@ -15,7 +15,7 @@ model:
       mode: soft
     loss_kwargs:
       in_channels: ${..ed_kwargs.in_channels}
-      gan_start_step: 0
+      gan_warmup_steps: 1000
       quant_weight: 5e-2
     num_pre_downsamples: 1
     optimizer:
@@ -58,18 +58,15 @@ data:
       train_batch_size: 2
       num_train_steps: ${trainer.max_steps}
     trans_conf:
-      train_tz: 3
+      train_tz: 2
       train_tx:
-        min: 12
-        max: 16
+        min: 8
+        max: 8
       train_scale_x:
         min: 0.75
         max: 2.0
 trainer:
-  strategy:
-    class_path: lightning.pytorch.strategies.DDPStrategy
-    init_args:
-      static_graph: true
+  strategy: ddp_find_unused_parameters_true
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
@@ -89,9 +86,10 @@ trainer:
   max_steps: 500
   val_check_interval: 100
   check_val_every_n_epoch: null
+  log_every_n_steps: 25
   benchmark: true
   plugins:
-  - class_path: lightning.pytorch.plugins.MixedPrecisionPlugin
+  - class_path: luolib.plugins.MOAGCMixedPrecisionPlugin
     init_args:
       precision: 16-mixed
       device: cuda

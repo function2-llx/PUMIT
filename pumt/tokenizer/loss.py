@@ -68,7 +68,7 @@ class VQGANLoss(nn.Module):
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
-        gan_start_step: int = 0,
+        gan_warmup_steps: int = 1000,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
         disc_force_rgb: bool = True,
@@ -87,8 +87,10 @@ class VQGANLoss(nn.Module):
         print(f'{self.__class__.__name__}: running with LPIPS')
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
-        self.gan_start_step = gan_start_step
+        assert gan_warmup_steps >= 0
+        self.gan_warmup_steps = gan_warmup_steps
         self.gan_weight = gan_weight
+        self.cur_gan_weight = gan_weight
 
         self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
         self.disc_force_rgb = disc_force_rgb
@@ -116,18 +118,19 @@ class VQGANLoss(nn.Module):
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def forward(
+    def adjust_gan_weight(self, global_step: int):
+        if global_step >= self.gan_warmup_steps:
+            self.cur_gan_weight = self.gan_weight
+        else:
+            self.cur_gan_weight = (global_step / self.gan_warmup_steps) * self.gan_weight
+
+    def forward_gen(
         self,
         x: torch.Tensor,
         x_rec: torch.Tensor,
         spacing: torch.Tensor,
         quant_loss: torch.Tensor,
-        global_step: int = 0,
-        adaptive_weight_ref: nn.Parameter | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        x = x.contiguous()
-        x_rec = x_rec.contiguous()
-
+    ) -> tuple[torch.Tensor, dict]:
         rec_loss = self.rec_loss(x, x_rec)
         if self.perceptual_weight > 0:
             if self.training and x.shape[2] > self.max_perceptual_slices:
@@ -148,37 +151,30 @@ class VQGANLoss(nn.Module):
             perceptual_loss = torch.zeros_like(rec_loss)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
 
-        x = ensure_rgb(x, self.disc_force_rgb)
         x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
-        # generator part
-        if self.training:
-            self.discriminator.eval()
-            self.discriminator.requires_grad_(False)
         score_fake = self.discriminator(x_rec, spacing)
         gan_loss = -score_fake.mean()
-        if self.training:
-            if global_step >= self.gan_start_step:
-                gan_weight = self.gan_weight * calculate_adaptive_weight(vq_loss, gan_loss, ref_param=adaptive_weight_ref)
-            else:
-                gan_weight = 0
-        else:
-            gan_weight = self.gan_weight
-        loss = vq_loss + gan_weight * gan_loss
-
-        # discriminator part
-        if self.training:
-            self.discriminator.train()
-            if torch.is_grad_enabled():
-                self.discriminator.requires_grad_(True)
-        score_real = self.discriminator(x.detach(), spacing)
-        score_fake = self.discriminator(x_rec.detach(), spacing)
-        disc_loss = 0.5 * hinge_loss(score_real, score_fake)
-        return loss, disc_loss, {
+        loss = vq_loss + self.cur_gan_weight * gan_loss
+        return loss, {
             'loss': loss,
             'rec_loss': rec_loss,
             'perceptual_loss': perceptual_loss,
             'quant_loss': quant_loss,
             'vq_loss': vq_loss,
             'gan_loss': gan_loss,
-            'disc_loss': disc_loss,
+            'gan_weight': self.cur_gan_weight,
         }
+
+    def forward_disc(self,
+        x: torch.Tensor,
+        x_rec: torch.Tensor,
+        spacing: torch.Tensor,
+        log_dict: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        x = ensure_rgb(x, self.disc_force_rgb)
+        x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
+        score_real = self.discriminator(x.detach(), spacing)
+        score_fake = self.discriminator(x_rec.detach(), spacing)
+        disc_loss = 0.5 * hinge_loss(score_real, score_fake)
+        log_dict['disc_loss'] = disc_loss
+        return disc_loss

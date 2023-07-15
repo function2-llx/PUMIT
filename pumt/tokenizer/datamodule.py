@@ -27,7 +27,7 @@ class DataLoaderConf:
 @dataclass(kw_only=True)
 class TransformConf:
     train_tz: int
-    val_tz: int = 6
+    val_tz: int = 4
     train_tx: RangeTuple
     val_tx: int = 16
     rotate_p: float = 0.3

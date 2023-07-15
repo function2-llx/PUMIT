@@ -29,7 +29,6 @@ class VectorQuantizer(nn.Module):
         mode: Literal['nearest', 'gumbel', 'soft'],
         hard_gumbel: bool = True,
         beta: float = 0.25,
-        max_training_steps: int | None = None,
     ):
         super().__init__()
         self.mode = mode
@@ -42,14 +41,13 @@ class VectorQuantizer(nn.Module):
             if mode == 'gumbel':
                 self.hard_gumbel = hard_gumbel
                 self.temperature = 1.
-                self.max_training_steps = max_training_steps
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
 
-    def adjust_temperature(self, global_step: int):
+    def adjust_temperature(self, global_step: int, max_steps: int):
         t_min, t_max = 1e-6, 1.
-        return t_min + 0.5 * (t_max - t_min) * (1 + np.cos(min(global_step / self.max_training_steps, 1.) * np.pi))
+        self.temperature = t_min + 0.5 * (t_max - t_min) * (1 + np.cos(min(global_step / max_steps, 1.) * np.pi))
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if (weight := state_dict.pop(f'{prefix}embed.weight', None)) is not None:

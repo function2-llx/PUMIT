@@ -1,7 +1,6 @@
 from collections import OrderedDict
 from collections.abc import Sequence
 from copy import copy
-from typing import Any
 
 import cytoolz
 import numpy as np
@@ -168,7 +167,6 @@ class Encoder(nn.Module):
         z_channels: int,
         layer_channels: Sequence[int],
         num_res_blocks: int,
-        # num_interpolations: int = 0,
         attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
         dropout: float = 0.,
@@ -402,53 +400,9 @@ class VQGAN(LightningModule):
     def log_dict_split(self, data: dict, split: str, batch_size: int | None = None):
         self.log_dict({f'{split}/{k}': v for k, v in data.items()}, batch_size=batch_size, sync_dist=True)
 
-    def forward_batch(self, batch: list[dict]) -> dict:
-        batch_size = len(batch)
-        batch_log_dict = None
-        for sample in batch:
-            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
-            x = x[None]
-            spacing = spacing[None]
-            x_rec, quant_out = self(x, spacing)
-            loss, disc_loss, log_dict = self.loss(
-                x, x_rec, spacing, quant_out.loss, self.global_step,
-                adaptive_weight_ref=self.decoder.conv_out.weight,
-            )
-            if self.training:
-                self.manual_backward(loss / batch_size)
-                self.manual_backward(disc_loss / batch_size)
-            if batch_log_dict is None:
-                batch_log_dict = log_dict
-            else:
-                for k, v in log_dict.items():
-                    batch_log_dict[k] += v
-        for k in batch_log_dict:
-            batch_log_dict[k] /= batch_size
-        return batch_log_dict
-
-    def on_train_batch_start(self, *args, **kwargs):
-        lr_scheduler, disc_lr_scheduler = self.lr_schedulers()
-        lr_scheduler.step_update(self.global_step)
-        disc_lr_scheduler.step_update(self.global_step)
-
     def lr_scheduler_step(self, *args, **kwargs) -> None:
-        # make lightning happy with the incompatible API
+        # make lightning happy with the incompatible API: https://github.com/Lightning-AI/lightning/issues/18074
         pass
-
-    def training_step(self, batch: list[dict], *args, **kwargs):
-        optimizer, disc_optimizer = self.optimizers()
-        optimizer.zero_grad()
-        disc_optimizer.zero_grad()
-        if self.quantize.mode == 'gumbel' and not self.quantize.hard_gumbel:
-            self.quantize.adjust_temperature(self.global_step)
-        batch_log_dict = self.forward_batch(batch)
-        optimizer.step()
-        disc_optimizer.step()
-        self.log_dict_split(batch_log_dict, 'train', len(batch))
-
-    def validation_step(self, batch: list[dict], *args, **kwargs):
-        batch_log_dict = self.forward_batch(batch)
-        self.log_dict_split(batch_log_dict, 'val', len(batch))
 
     def configure_optimizers(self):
         no_weight_decay_keys = get_no_weight_decay_keys(self)
@@ -474,40 +428,80 @@ class VQGAN(LightningModule):
             self.disc_optimizer,
         )
         from timm.scheduler.scheduler import Scheduler as TIMMScheduler
-        lr_scheduler_config = copy(self.lr_scheduler_config)
-        lr_scheduler_config.scheduler = instantiate_class(optimizer, lr_scheduler_config.scheduler)
-        assert isinstance(lr_scheduler_config.scheduler, TIMMScheduler)
-        disc_lr_scheduler_config = copy(self.disc_lr_scheduler_config)
-        disc_lr_scheduler_config.scheduler = instantiate_class(disc_optimizer, disc_lr_scheduler_config.scheduler)
-        assert isinstance(disc_lr_scheduler_config.scheduler, TIMMScheduler)
-        return [optimizer, disc_optimizer], [vars(lr_scheduler_config), vars(disc_lr_scheduler_config)]
+        def instantiate_and_check(config: LRSchedulerConfig, optimizer):
+            config = copy(config)
+            config.scheduler = instantiate_class(optimizer, config.scheduler)
+            assert isinstance(config.scheduler, TIMMScheduler)
+            assert config.interval == 'step'
+            return vars(config)
 
-#     def log_images(self, batch, only_inputs=False, plot_ema=False, **kwargs):
-#         log = dict()
-#         x = self.get_input(batch, self.image_key)
-#         x = x.to(self.device)
-#         if only_inputs:
-#             log["inputs"] = x
-#             return log
-#         xrec, _ = self(x)
-#         if x.shape[1] > 3:
-#             # colorize with random projection
-#             assert xrec.shape[1] > 3
-#             x = self.to_rgb(x)
-#             xrec = self.to_rgb(xrec)
-#         log["inputs"] = x
-#         log["reconstructions"] = xrec
-#         if plot_ema:
-#             with self.ema_scope():
-#                 xrec_ema, _ = self(x)
-#                 if x.shape[1] > 3: xrec_ema = self.to_rgb(xrec_ema)
-#                 log["reconstructions_ema"] = xrec_ema
-#         return log
-#
-#     def to_rgb(self, x):
-#         assert self.image_key == "segmentation"
-#         if not hasattr(self, "colorize"):
-#             self.register_buffer("colorize", torch.randn(3, x.shape[1], 1, 1).to(x))
-#         x = F.Conv3d(x, weight=self.colorize)
-#         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
-#         return x
+        return [optimizer, disc_optimizer], [
+            instantiate_and_check(self.lr_scheduler_config, optimizer),
+            instantiate_and_check(self.disc_lr_scheduler_config, disc_optimizer)
+        ]
+
+    def on_fit_start(self) -> None:
+        from lightning.pytorch.loops import _TrainingEpochLoop
+        class MyTrainingEpochLoop(_TrainingEpochLoop):
+            @property
+            def global_step(self):
+                # https://github.com/Lightning-AI/lightning/issues/17958
+                return super().global_step // 2
+        self.trainer.fit_loop.epoch_loop.__class__ = MyTrainingEpochLoop
+
+    def on_train_batch_start(self, *args, **kwargs):
+        for config in self.trainer.lr_scheduler_configs:
+            if self.global_step % config.frequency == 0:
+                config.scheduler.step_update(self.global_step)
+
+    def training_step(self, batch: list[dict], *args, **kwargs):
+        optimizer, disc_optimizer = self.optimizers()
+        optimizer.zero_grad()
+        disc_optimizer.zero_grad()
+        if self.quantize.mode == 'gumbel' and not self.quantize.hard_gumbel:
+            self.quantize.adjust_temperature(self.global_step, self.trainer.max_steps)
+        batch_size = len(batch)
+        batch_log_dict = None
+        for sample in batch:
+            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
+            x = x[None]
+            spacing = spacing[None]
+            self.toggle_optimizer(optimizer)
+            x_rec, quant_out = self(x, spacing)
+            self.loss.adjust_gan_weight(self.global_step)
+            loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
+            self.manual_backward(loss / batch_size)
+            self.untoggle_optimizer(optimizer)
+            self.toggle_optimizer(disc_optimizer)
+            disc_loss = self.loss.forward_disc(x, x_rec, spacing, log_dict)
+            self.manual_backward(disc_loss / batch_size)
+            self.untoggle_optimizer(disc_optimizer)
+            if batch_log_dict is None:
+                batch_log_dict = log_dict
+            else:
+                for k, v in log_dict.items():
+                    batch_log_dict[k] += v
+        optimizer.step()
+        disc_optimizer.step()
+        for k in batch_log_dict:
+            batch_log_dict[k] /= batch_size
+        self.log_dict_split(batch_log_dict, 'train', len(batch))
+
+    def validation_step(self, batch: list[dict], *args, **kwargs):
+        batch_size = len(batch)
+        batch_log_dict = None
+        for sample in batch:
+            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
+            x = x[None]
+            spacing = spacing[None]
+            x_rec, quant_out = self(x, spacing)
+            loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
+            self.loss.forward_disc(x, x_rec, spacing, log_dict)
+            if batch_log_dict is None:
+                batch_log_dict = log_dict
+            else:
+                for k, v in log_dict.items():
+                    batch_log_dict[k] += v
+        for k in batch_log_dict:
+            batch_log_dict[k] /= batch_size
+        self.log_dict_split(batch_log_dict, 'val', len(batch))
