@@ -117,18 +117,22 @@ class CenterScaleCropD(mt.LazyTransform):
         return data
 
 class NormalizeIntensityD(mt.Transform):
+    def __init__(self, b_min: float = 0., b_max: float = 1.):
+        self.b_min = b_min
+        self.b_max = b_max
+
     def __call__(self, data: Mapping):
         data = dict(data)
         img: MetaTensor = data[DataKey.IMG]
         modality: str = data['modality']
         if modality.startswith('RGB') or modality.startswith('gray'):
-            normalizer = mt.ScaleIntensityRange(0., 255., -1., 1.)
+            normalizer = mt.ScaleIntensityRange(0., 255., self.b_min, self.b_max)
         else:
-            normalizer = mt.ScaleIntensityRange(data['p0.5'], data['p99.5'], -1., 1., clip=True)
+            normalizer = mt.ScaleIntensityRange(data['p0.5'], data['p99.5'], self.b_min, self.b_max, clip=True)
         data[DataKey.IMG] = normalizer(img)
         return data
 
-class KeepSpacingD(mt.Transform):
+class PrepareInputD(mt.Transform):
     def __init__(self, img_key: Hashable = DataKey.IMG, spacing_key: Hashable = DataKey.SPACING):
         self.img_key = img_key
         self.spacing_key = spacing_key
@@ -137,8 +141,9 @@ class KeepSpacingD(mt.Transform):
         img: MetaTensor = data[self.img_key]
         spacing = img.pixdim
         # make x- and y-axis always be downsampled
+        img_tensor = img.as_tensor()
         spacing[0] = max(spacing[0], min(spacing[1:]))
         return {
-            self.img_key: img.as_tensor(),
+            self.img_key: img_tensor * 2 - 1,
             self.spacing_key: spacing,
         }

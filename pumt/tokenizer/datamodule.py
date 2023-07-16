@@ -13,7 +13,7 @@ from monai.data import DataLoader, Dataset
 from monai import transforms as mt
 
 from pumt.reader import PUMTReader
-from pumt.transforms import KeepSpacingD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
+from pumt.transforms import PrepareInputD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
 
 DATA_ROOT = Path('datasets-PUMT')
 
@@ -68,6 +68,7 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+                NormalizeIntensityD(),
                 RandAffineCropD(
                     trans_conf.train_tz,
                     trans_conf.train_tx,
@@ -78,8 +79,7 @@ class TokenizerDataModule(LightningDataModule):
                     trans_conf.scale_z,
                     trans_conf.stride,
                 ),
-                NormalizeIntensityD(),
-                KeepSpacingD(),
+                PrepareInputD(),
             ],
             lazy=True,
         )
@@ -104,14 +104,14 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+                NormalizeIntensityD(),
                 CenterScaleCropD(
                     trans_conf.val_tz,
                     trans_conf.val_tx,
                     trans_conf.val_scale_x,
                     trans_conf.stride,
                 ),
-                NormalizeIntensityD(),
-                KeepSpacingD(),
+                PrepareInputD(),
             ],
             lazy=True,
         )
