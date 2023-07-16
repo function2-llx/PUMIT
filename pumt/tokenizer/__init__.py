@@ -1,2 +1,3 @@
 from .datamodule import TokenizerDataModule
-from .model import VQGAN
+from .vqvae import VQVAEModel, VQGAN
+from .discriminator import PatchDiscriminator
