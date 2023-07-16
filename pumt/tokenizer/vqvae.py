@@ -13,7 +13,7 @@ from torch.utils.checkpoint import checkpoint
 
 from luolib.models import adaptive_resampling as ar
 from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
-from luolib.models.utils import get_no_weight_decay_keys, load_ckpt, split_by_weight_decay
+from luolib.models.utils import split_weight_decay_keys, load_ckpt, create_param_groups
 from luolib.utils import DataKey
 from luolib.types import LRSchedulerConfig
 
@@ -403,6 +403,7 @@ class VQGAN(VQVAEModel, LightningModule):
         ckpt_path: Path | None = None,
     ):
         VQVAEModel.__init__(self, z_channels, embedding_dim, ed_kwargs, vq_kwargs, force_rgb, num_pre_downsamples)
+        LightningModule.__init__(self)
         self.loss = VQGANLoss(**loss_kwargs)
         self.optimizer = optimizer
         self.lr_scheduler_config = lr_scheduler_config
@@ -419,25 +420,27 @@ class VQGAN(VQVAEModel, LightningModule):
         pass
 
     def configure_optimizers(self):
-        no_weight_decay_keys = get_no_weight_decay_keys(self)
+        decay_keys, no_decay_keys = split_weight_decay_keys(self)
         optimizer = instantiate_class(
-            split_by_weight_decay(
+            create_param_groups(
                 [
                     (name, param)
                     for child_name, child in self.named_children() if child_name != 'loss'
                     for name, param in child.named_parameters(prefix=child_name) if param.requires_grad
                 ],
-                no_weight_decay_keys
+                decay_keys,
+                no_decay_keys,
             ),
             self.optimizer,
         )
         disc_optimizer = instantiate_class(
-            split_by_weight_decay(
+            create_param_groups(
                 [
                     (name, param)
                     for name, param in self.loss.named_parameters(prefix='loss') if param.requires_grad
                 ],
-                no_weight_decay_keys,
+                decay_keys,
+                no_decay_keys,
             ),
             self.disc_optimizer,
         )

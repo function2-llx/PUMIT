@@ -43,7 +43,7 @@ class TokenizerDataModule(LightningDataModule):
         self,
         dataset_weights: dict[str, float],
         dl_conf: DataLoaderConf,
-        trans_conf: TransformConf
+        trans_conf: TransformConf,
     ):
         super().__init__()
         self.train_data = pd.DataFrame()
@@ -61,6 +61,7 @@ class TokenizerDataModule(LightningDataModule):
                 self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
+        self.world_size = None
 
     def train_transform(self) -> Callable:
         trans_conf = self.trans_conf
@@ -91,9 +92,9 @@ class TokenizerDataModule(LightningDataModule):
             batch_size=conf.train_batch_size,
             sampler=WeightedRandomSampler(
                 self.train_data['weight'].to_numpy(),
-                conf.num_train_steps * conf.train_batch_size * self.trainer.num_devices,
+                conf.num_train_steps * conf.train_batch_size * self.world_size,
             ),
-            collate_fn=cytoolz.identity,
+            # collate_fn=cytoolz.identity,
             pin_memory=True,
             persistent_workers=conf.num_workers > 0,
         )
@@ -121,5 +122,5 @@ class TokenizerDataModule(LightningDataModule):
             Dataset(self.val_data.to_dict('records'), self.val_transform()),
             conf.num_workers,
             batch_size=conf.val_batch_size,
-            collate_fn=cytoolz.identity,
+            # collate_fn=cytoolz.identity,
         )

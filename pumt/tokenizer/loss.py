@@ -29,14 +29,14 @@ def hinge_loss(score_real: torch.Tensor, score_fake: torch.Tensor):
 class VQGANLoss(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        quant_weight: float = 1.0,
+        quant_weight: float,
         rec_loss: Literal['l1', 'l2'] = 'l1',
         rec_weight: float = 1.0,
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
-        gan_warmup_steps: int = 1000,
+        gan_warmup_steps: int = 10000,
+        disc_in_channels: int = 3,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
         disc_force_rgb: bool = True,
@@ -51,7 +51,7 @@ class VQGANLoss(nn.Module):
                 self.rec_loss = nn.MSELoss()
             case _:
                 raise ValueError
-        self.perceptual_loss = LPIPS().eval()
+        self.perceptual_loss = LPIPS()
         print(f'{self.__class__.__name__}: running with LPIPS')
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
@@ -60,7 +60,7 @@ class VQGANLoss(nn.Module):
         self.gan_weight = gan_weight
         self.cur_gan_weight = gan_weight
 
-        self.discriminator = PatchDiscriminator(in_channels, disc_num_downsample_layers, disc_base_channels)
+        self.discriminator = PatchDiscriminator(disc_in_channels, disc_num_downsample_layers, disc_base_channels)
         self.disc_force_rgb = disc_force_rgb
         print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
 
@@ -138,11 +138,11 @@ class VQGANLoss(nn.Module):
         x_rec: torch.Tensor,
         spacing: torch.Tensor,
         log_dict: dict[str, torch.Tensor],
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         x = ensure_rgb(x, self.disc_force_rgb)
         x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
         score_real = self.discriminator(x.detach(), spacing)
         score_fake = self.discriminator(x_rec.detach(), spacing)
         disc_loss = 0.5 * hinge_loss(score_real, score_fake)
         log_dict['disc_loss'] = disc_loss
-        return disc_loss
+        return disc_loss, log_dict

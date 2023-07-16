@@ -16,21 +16,41 @@ optimizer_g:
   init_args:
     lr: 1e-4
     weight_decay: 5e-2
-discriminator:
-  in_channels: 3
-  num_downsample_layers: 3
-  base_channels: 64
+lr_scheduler_g:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_initial: ${training.max_steps}
+      lr_min: 1e-6
+      warmup_t: 0
+      warmup_prefix: true
+  interval: step
+  frequency: 100
+loss:
+  quant_weight: 1e-2
+  gan_warmup_steps: 10000
+  max_perceptual_slices: 16
 optimizer_d:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 1e-3
+    lr: 1e-4
     weight_decay: 5e-2
+lr_scheduler_d:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_initial: ${training.max_steps}
+      lr_min: 1e-6
+      warmup_t: 0
+      warmup_prefix: true
+  interval: step
+  frequency: 100
 data:
   dataset_weights:
     CheXpert: 0.1
     NIHChestX-ray: 0.1
   dl_conf:
-    train_batch_size: 2
+    train_batch_size: 1
     num_train_steps: ${training.max_steps}
   trans_conf:
     train_tz: 2
@@ -42,74 +62,5 @@ data:
       max: 2.0
 training:
   max_steps: 1000
-#logger:
-#  name: tokenizer
-#  save_dir: output/tokenizer
-#  project: PUMT
-#    loss_kwargs:
-#      in_channels: ${..ed_kwargs.in_channels}
-#      gan_warmup_steps: 10000
-#      quant_weight: 1e-3
-#    optimizer:
-#      class_path: torch.optim.AdamW
-#      init_args:
-#        lr: 1e-4
-#        weight_decay: 5e-2
-#    disc_optimizer:
-#      class_path: torch.optim.AdamW
-#      init_args:
-#        lr: 1e-3
-#        weight_decay: 5e-2
-#    lr_scheduler_config:
-#      scheduler:
-#        class_path: timm.scheduler.CosineLRScheduler
-#        init_args:
-#          t_initial: ${trainer.max_steps}
-#          lr_min: 1e-6
-#          warmup_t: 0
-#          warmup_prefix: true
-#      interval: step
-#      frequency: 100
-#    disc_lr_scheduler_config:
-#      scheduler:
-#        class_path: timm.scheduler.CosineLRScheduler
-#        init_args:
-#          t_initial: ${trainer.max_steps}
-#          lr_min: 1e-6
-#          warmup_t: 0
-#          warmup_prefix: true
-#      interval: step
-#      frequency: 100
-#    ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
-#trainer:
-#  strategy: ddp_find_unused_parameters_true
-#  logger:
-#    class_path: lightning.pytorch.loggers.WandbLogger
-#    init_args:
-#      name: tokenizer
-#      save_dir: output/tokenizer
-#      project: PUMT
-#  callbacks:
-#  - lightning.pytorch.callbacks.LearningRateMonitor
-#  - class_path: lightning.pytorch.callbacks.ModelSummary
-#    init_args:
-#      max_depth: 2
-#  - class_path: lightning.pytorch.callbacks.ModelCheckpoint
-#    init_args:
-#      every_n_train_steps: 100
-#      save_top_k: -1
-#      verbose: true
-#  max_steps: 500
-#  val_check_interval: 100
-#  check_val_every_n_epoch: null
-#  log_every_n_steps: 25
-#  benchmark: true
-#  plugins:
-#  - class_path: luolib.plugins.MOAGCMixedPrecisionPlugin
-#    init_args:
-#      precision: 16-mixed
-#      device: cuda
-#      scaler:
-#        class_path: torch.cuda.amp.GradScaler
-#        init_args:
-#          init_scale: 4096
+  max_norm_d: 2
+#ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
