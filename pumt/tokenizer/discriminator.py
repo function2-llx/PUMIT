@@ -1,8 +1,7 @@
 import torch
 from torch import nn
 
-from luolib.models.adaptive_resampling import AdaptiveConvDownsample
-from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d
+from pumt.conv import AdaptiveConvDownsample, InflatableConv3d, InflatableInputConv3d
 
 class PatchDiscriminator(nn.Module):
     def __init__(self, in_channels: int, num_downsample_layers: int = 3, base_channels: int = 64):

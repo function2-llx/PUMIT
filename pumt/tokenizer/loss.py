@@ -35,7 +35,7 @@ class VQGANLoss(nn.Module):
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
-        gan_warmup_steps: int = 10000,
+        gan_start_step: int = 10000,
         disc_in_channels: int = 3,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
@@ -55,10 +55,9 @@ class VQGANLoss(nn.Module):
         print(f'{self.__class__.__name__}: running with LPIPS')
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
-        assert gan_warmup_steps >= 0
-        self.gan_warmup_steps = gan_warmup_steps
         self.gan_weight = gan_weight
         self.cur_gan_weight = gan_weight
+        self.gan_start_step = gan_start_step
 
         self.discriminator = PatchDiscriminator(disc_in_channels, disc_num_downsample_layers, disc_base_channels)
         self.disc_force_rgb = disc_force_rgb
@@ -87,10 +86,10 @@ class VQGANLoss(nn.Module):
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def adjust_gan_weight(self, global_step: int):
-        if global_step >= self.gan_warmup_steps:
-            self.cur_gan_weight = self.gan_weight
+        if global_step >= self.gan_start_step:
+            self.cur_gan_weight = 1.
         else:
-            self.cur_gan_weight = (global_step / self.gan_warmup_steps) * self.gan_weight
+            self.cur_gan_weight = 0.
 
     def forward_gen(
         self,

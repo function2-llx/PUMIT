@@ -11,8 +11,6 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from luolib.models import adaptive_resampling as ar
-from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d
 from luolib.models.utils import split_weight_decay_keys, load_ckpt, create_param_groups
 from luolib.utils import DataKey
 from luolib.types import LRSchedulerConfig
@@ -20,6 +18,10 @@ from luolib.types import LRSchedulerConfig
 from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 from .utils import ensure_rgb, rgb_to_gray
+from ..conv import (
+    AdaptiveConvDownsample, InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d,
+    SpatialTensor,
+)
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
@@ -129,7 +131,6 @@ class EncoderDownLayer(nn.Module):
         downsample: bool,
         gradient_checkpointing: bool,
     ):
-        # use_attn = False
         super().__init__()
         self.block: Sequence[ResnetBlock] | nn.ModuleList = nn.ModuleList([
             ResnetBlock(in_channels if i == 0 else out_channels, out_channels)
@@ -140,13 +141,13 @@ class EncoderDownLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if downsample:
-            self.downsample = ar.AdaptiveConvDownsample(out_channels, kernel_size=3)
+            self.downsample = InflatableConv3d(out_channels, out_channels, kernel_size=(2, 3, 3), stride=2, padding=(0, 1, 1))
         else:
             self.register_module('downsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: torch.Tensor, spacing: torch.Tensor):
+    def forward(self, x: SpatialTensor):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -154,10 +155,8 @@ class EncoderDownLayer(nn.Module):
                 x = block(x)
                 x = attn(x)
         if self.downsample is not None:
-            x, spacing, downsample_mask = self.downsample(x, spacing)
-        else:
-            downsample_mask = x.new_zeros(x.shape[0], 3, dtype=bool)
-        return x, spacing, downsample_mask
+            x = self.downsample(x)
+        return x
 
 class Encoder(nn.Module):
     down: Sequence[EncoderDownLayer] | nn.ModuleList
@@ -170,6 +169,7 @@ class Encoder(nn.Module):
         num_res_blocks: int,
         attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
+        additional_interpolation: bool = False,
         dropout: float = 0.,
         gradient_checkpointing: bool = False,
     ):
@@ -177,6 +177,7 @@ class Encoder(nn.Module):
         num_layers = len(layer_channels)
         attn_layer_ids = attn_layer_ids or []
         self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
+        # self.additional_interpolation = AdaptiveInterpolateDownsample() if additional_interpolation else nn.Identity()
         # downsampling
         self.down = nn.ModuleList([
             EncoderDownLayer(
@@ -205,18 +206,19 @@ class Encoder(nn.Module):
         self.norm_out = get_norm_layer(last_channels)
         self.conv_out = InflatableConv3d(last_channels, z_channels, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, spacing: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+    def forward(self, x: SpatialTensor) -> SpatialTensor:
         x = self.conv_in(x)
+        # x = self.additional_interpolation(x, spacing)
         downsample_masks = []
         for down in self.down:
-            x, spacing, downsample_mask = down(x, spacing)
+            x, spacing, downsample_mask = down(x)
             downsample_masks.append(downsample_mask)
         x = self.mid(x)
         # end
         x = self.norm_out(x)
         x = act_layer(x)
         z = self.conv_out(x)
-        return z, spacing, downsample_masks
+        return z
 
 class DecoderUpLayer(nn.Module):
     def __init__(
@@ -239,7 +241,8 @@ class DecoderUpLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if upsample:
-            self.upsample = ar.AdaptiveConvUpsample(out_channels)
+            pass
+            # self.upsample = pumt.blocks.AdaptiveConvUpsample(out_channels)
         else:
             self.register_module('upsample', None)
 
@@ -267,6 +270,7 @@ class Decoder(nn.Module):
         num_res_blocks: int,
         attn_layer_ids: Sequence[int] | None = None,
         mid_attn: bool = True,
+        additional_interpolation: bool = False,
         dropout: float = 0.0,
         gradient_checkpointing: bool = False,
     ):
@@ -300,13 +304,14 @@ class Decoder(nn.Module):
             )
             for i in range(num_layers)
         ])
+        self.additional_interpolation = pumt.blocks.AdaptiveUpsample() if additional_interpolation else nn.Identity()
 
         # end
         first_channels = layer_channels[0]
         self.norm_out = get_norm_layer(first_channels)
         self.conv_out = InflatableOutputConv3d(first_channels, in_channels, kernel_size=3, padding=1)
 
-    def forward(self, z: torch.Tensor, upsample_masks: list[torch.Tensor]):
+    def forward(self, z: torch.Tensor, spacing: torch.Tensor, upsample_masks: list[torch.Tensor]):
         # convert z to last feature map channels
         x = self.conv_in(z)
 
@@ -316,7 +321,7 @@ class Decoder(nn.Module):
         # upsampling
         for up, upsample_mask in zip(reversed(self.up), reversed([None] + upsample_masks[:-1])):
             x = up(x, upsample_mask)
-
+        x = self.additional_interpolation(x)
         # end
         x = self.norm_out(x)
         x = act_layer(x)
@@ -331,7 +336,6 @@ class VQVAEModel(nn.Module):
         ed_kwargs: dict,
         vq_kwargs: dict,
         force_rgb: bool = True,
-        num_pre_downsamples: int = 0,
     ):
         super().__init__()
         self.encoder = Encoder(**ed_kwargs)
@@ -340,50 +344,26 @@ class VQVAEModel(nn.Module):
         self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
         self.force_rgb = force_rgb
-        self.num_pre_downsamples = num_pre_downsamples
-        if num_pre_downsamples > 0:
-            self.pre_downsample = ar.AdaptiveInterpolateDownsample()
-            self.post_upsample = ar.AdaptiveUpsample()
-        else:
-            self.register_module('pre_downsample', None)
-            self.register_module('post_upsample', None)
 
     def encode(self, x: torch.Tensor, spacing: torch.Tensor | None = None):
         if spacing is None:
             spacing = x.new_ones(x.shape[0], 3)
-        pre_downsample_masks = []
-        for _ in range(self.num_pre_downsamples):
-            x, spacing, mask = self.pre_downsample(x, spacing)
-            pre_downsample_masks.append(mask)
         x = ensure_rgb(x, self.force_rgb)
         z, spacing, downsample_masks = self.encoder(x, spacing)
         z = self.quant_conv(z)
         quant_out = self.quantize(z)
-        return quant_out, downsample_masks, pre_downsample_masks
+        return quant_out, spacing, downsample_masks
 
-    def decode(
-        self,
-        z_q: torch.Tensor,
-        upsample_masks: list[torch.Tensor],
-        post_upsample_masks: list[torch.Tensor],
-        to_gray: bool = False,
-    ):
+    def decode(self, z_q: torch.Tensor, spacing: torch.Tensor, upsample_masks: list[torch.Tensor], to_gray: bool = False):
         z_q = self.post_quant_conv(z_q)
-        x_rec = self.decoder(z_q, upsample_masks)
+        x_rec = self.decoder(z_q, spacing, upsample_masks)
         if to_gray:
             x_rec = rgb_to_gray(x_rec)
-        for post_upsample_mask in reversed(post_upsample_masks):
-            x_rec = self.post_upsample(x_rec, post_upsample_mask)
         return x_rec
 
     def forward(self, x: torch.Tensor, spacing: torch.Tensor | None = None) -> tuple[torch.Tensor, VectorQuantizerOutput]:
-        quant_out, downsample_masks, pre_downsample_masks = self.encode(x, spacing)
-        x_rec = self.decode(
-            quant_out.z_q,
-            downsample_masks,
-            pre_downsample_masks,
-            self.force_rgb and x.shape[1] == 1,
-        )
+        quant_out, spacing, downsample_masks = self.encode(x, spacing)
+        x_rec = self.decode(quant_out.z_q, spacing, downsample_masks, self.force_rgb and x.shape[1] == 1)
         return x_rec, quant_out
 
 class VQGAN(VQVAEModel, LightningModule):

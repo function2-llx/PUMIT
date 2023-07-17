@@ -28,9 +28,9 @@ lr_scheduler_g:
   interval: step
   frequency: 100
 loss:
-  quant_weight: 2e-5
-  gan_weight: 0.05
-  gan_warmup_steps: 10000
+  quant_weight: 5e-6
+  gan_weight: 1
+  gan_start_step: 10000
   max_perceptual_slices: 16
 optimizer_d:
   class_path: torch.optim.AdamW
@@ -50,13 +50,13 @@ lr_scheduler_d:
   frequency: 100
 data:
   dataset_weights:
-    CheXpert: 0.1
-    NIHChestX-ray: 0.1
+    CheXpert: 0.03
+    NIHChestX-ray: 0.03
   dl_conf:
     train_batch_size: 1
     num_train_steps: ${training.max_steps}
   trans_conf:
-    train_tz: 2
+    train_tz: 3
     train_tx:
       min: 8
       max: 8

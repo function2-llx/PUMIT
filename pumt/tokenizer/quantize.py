@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.nn import functional as nnf
 
-from luolib.models.blocks import InflatableConv3d
+from pumt.conv import InflatableConv3d
 from luolib.utils import channel_last, channel_first
 from monai.config import PathLike
 
