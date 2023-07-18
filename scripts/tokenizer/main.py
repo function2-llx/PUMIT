@@ -38,8 +38,8 @@ class Fabric(LightningFabric):
 class TrainingArguments:
     max_steps: int
     seed: int = 42
-    log_every_n_steps: int = 50
-    save_every_n_steps: int = 1000
+    log_every_n_steps: int = 20
+    save_every_n_steps: int = 10000
     max_norm_g: int | float | None = None
     max_norm_d: int | float | None = None
     ckpt_path: Path
@@ -111,11 +111,13 @@ def main():
     fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
     fabric.launch()
+    save_dir = training_args.output_dir / logger.version if fabric.is_global_zero else None
+    save_dir = fabric.broadcast(save_dir)
+    img_save_dir = save_dir / 'images'
+    ckpt_save_dir = save_dir / 'checkpoints'
     if fabric.is_global_zero:
-        save_dir = training_args.output_dir / logger.version
-        save_dir.mkdir(parents=True)
+        ckpt_save_dir.mkdir(parents=True)
         parser.save(raw_args, save_dir / 'conf.yaml')
-        img_save_dir = save_dir / 'images'
     torch.backends.cudnn.benchmark = True
     ckpt = torch.load(training_args.ckpt_path, map_location='cpu')
     vqvae: VQVAEModel = args.vqvae
@@ -143,7 +145,7 @@ def main():
     )
 
     metric_dict = MetricDict()
-    for step, x in enumerate(tqdm(train_loader, ncols=80, desc='training')):
+    for step, x in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, quant_out = vqvae(x)
         loss_module.discriminator.requires_grad_(False)
@@ -168,14 +170,23 @@ def main():
         optimizer_d.step()
         optimizer_d.zero_grad()
         metric_dict.update_metrics(log_dict)
-        if (optimized_steps := step + 1) % training_args.log_every_n_steps == 0:
+        optimized_steps = step + 1
+        if optimized_steps % training_args.log_every_n_steps == 0:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
             if fabric.is_global_zero:
-                step_dir = img_save_dir / f'step-{optimized_steps}'
-                step_dir.mkdir(parents=True)
+                step_save_dir = img_save_dir / f'step-{optimized_steps}'
+                step_save_dir.mkdir(parents=True)
                 for i in range(x.shape[2]):
-                    save_image((x[0, :, i] + 1) / 2, step_dir / f'{i}-origin.png')
-                    save_image((x_rec[0, :, i] + 1) / 2, step_dir / f'{i}-rec.png')
+                    save_image((x[0, :, i] + 1) / 2, step_save_dir / f'{i}-origin.png')
+                    save_image((x_rec[0, :, i] + 1) / 2, step_save_dir / f'{i}-rec.png')
+        if optimized_steps % training_args.save_every_n_steps == 0:
+            fabric.save(ckpt_save_dir / f'step={optimized_steps}.ckpt', {
+                'vqvae': vqvae,
+                'discriminator': loss_module.discriminator,
+                'optimizer_g': optimizer_g,
+                'optimizer_d': optimizer_d,
+                'step': optimized_steps,
+            })
 
 if __name__ == '__main__':
     main()
