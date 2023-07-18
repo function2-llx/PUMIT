@@ -1,8 +1,7 @@
 import torch
 from torch import nn
 
-from luolib.models.adaptive_resampling import AdaptiveConvDownsample
-from luolib.models.blocks import InflatableConv3d, InflatableInputConv3d
+from pumt.conv import AdaptiveConvDownsample, InflatableConv3d, InflatableInputConv3d, SpatialTensor
 
 class PatchDiscriminator(nn.Module):
     def __init__(self, in_channels: int, num_downsample_layers: int = 3, base_channels: int = 64):
@@ -12,7 +11,7 @@ class PatchDiscriminator(nn.Module):
             base_channels << min(i, 3)
             for i in range(num_downsample_layers + 1)
         ]
-        self.main = nn.ModuleList()
+        self.main = nn.Sequential()
         self.main.extend([
             AdaptiveConvDownsample(in_channels, layer_channels[0], (3, 4, 4), InflatableInputConv3d),
             nn.LeakyReLU(0.2, inplace=True),
@@ -26,10 +25,5 @@ class PatchDiscriminator(nn.Module):
             ])
         self.main.append(InflatableConv3d(layer_channels[-1], 1, kernel_size=(3, 4, 4), stride=1, padding=1))
 
-    def forward(self, x: torch.Tensor, spacing: torch.Tensor):
-        for module in self.main:
-            if isinstance(module, AdaptiveConvDownsample):
-                x, spacing, _ = module(x, spacing)
-            else:
-                x = module(x)
-        return x
+    def forward(self, x: SpatialTensor):
+        return self.main(x)

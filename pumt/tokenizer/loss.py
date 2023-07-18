@@ -6,7 +6,7 @@ from torch import nn
 
 from .discriminator import PatchDiscriminator
 from .lpips import LPIPS
-from .utils import ensure_rgb
+from ..conv import SpatialTensor
 
 @torch.no_grad()
 def calculate_adaptive_weight(
@@ -35,11 +35,10 @@ class VQGANLoss(nn.Module):
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
-        gan_warmup_steps: int = 10000,
+        gan_start_step: int = 10000,
         disc_in_channels: int = 3,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
-        disc_force_rgb: bool = True,
     ):
         super().__init__()
         self.quant_weight = quant_weight
@@ -55,13 +54,11 @@ class VQGANLoss(nn.Module):
         print(f'{self.__class__.__name__}: running with LPIPS')
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
-        assert gan_warmup_steps >= 0
-        self.gan_warmup_steps = gan_warmup_steps
         self.gan_weight = gan_weight
         self.cur_gan_weight = gan_weight
+        self.gan_start_step = gan_start_step
 
         self.discriminator = PatchDiscriminator(disc_in_channels, disc_num_downsample_layers, disc_base_channels)
-        self.disc_force_rgb = disc_force_rgb
         print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
@@ -87,18 +84,12 @@ class VQGANLoss(nn.Module):
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def adjust_gan_weight(self, global_step: int):
-        if global_step >= self.gan_warmup_steps:
-            self.cur_gan_weight = self.gan_weight
+        if global_step >= self.gan_start_step:
+            self.cur_gan_weight = 1.
         else:
-            self.cur_gan_weight = (global_step / self.gan_warmup_steps) * self.gan_weight
+            self.cur_gan_weight = 0.
 
-    def forward_gen(
-        self,
-        x: torch.Tensor,
-        x_rec: torch.Tensor,
-        spacing: torch.Tensor,
-        quant_loss: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict]:
+    def forward_gen(self, x: SpatialTensor, x_rec: SpatialTensor, quant_loss: torch.Tensor) -> tuple[torch.Tensor, dict]:
         rec_loss = self.rec_loss(x, x_rec)
         if self.perceptual_weight > 0:
             if self.training and x.shape[2] > self.max_perceptual_slices:
@@ -119,8 +110,7 @@ class VQGANLoss(nn.Module):
             perceptual_loss = torch.zeros_like(rec_loss)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
 
-        x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
-        score_fake = self.discriminator(x_rec, spacing)
+        score_fake = self.discriminator(x_rec)
         gan_loss = -score_fake.mean()
         loss = vq_loss + self.cur_gan_weight * gan_loss
         return loss, {
@@ -133,16 +123,9 @@ class VQGANLoss(nn.Module):
             'gan_weight': self.cur_gan_weight,
         }
 
-    def forward_disc(self,
-        x: torch.Tensor,
-        x_rec: torch.Tensor,
-        spacing: torch.Tensor,
-        log_dict: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict]:
-        x = ensure_rgb(x, self.disc_force_rgb)
-        x_rec = ensure_rgb(x_rec, self.disc_force_rgb)
-        score_real = self.discriminator(x.detach(), spacing)
-        score_fake = self.discriminator(x_rec.detach(), spacing)
+    def forward_disc(self, x: SpatialTensor, x_rec: SpatialTensor, log_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict]:
+        score_real = self.discriminator(x.detach())
+        score_fake = self.discriminator(x_rec.detach())
         disc_loss = 0.5 * hinge_loss(score_real, score_fake)
         log_dict['disc_loss'] = disc_loss
         return disc_loss, log_dict
