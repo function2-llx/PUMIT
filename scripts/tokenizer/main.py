@@ -118,6 +118,7 @@ def main():
     if fabric.is_global_zero:
         ckpt_save_dir.mkdir(parents=True)
         parser.save(raw_args, save_dir / 'conf.yaml')
+    # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = True
     ckpt = torch.load(training_args.ckpt_path, map_location='cpu')
     vqvae: VQVAEModel = args.vqvae

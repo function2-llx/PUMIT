@@ -22,7 +22,7 @@ lr_scheduler_g:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 0
+      warmup_t: 2000
       warmup_prefix: true
   interval: step
   frequency: 100
@@ -42,7 +42,7 @@ lr_scheduler_d:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 0
+      warmup_t: 2000
       warmup_prefix: true
   interval: step
   frequency: 100
@@ -51,7 +51,7 @@ data:
     CheXpert: 0.03
     NIHChestX-ray: 0.03
   dl_conf:
-    train_batch_size: 2
+    train_batch_size: 4
   trans_conf:
     train_tz: 3
     train_tx: 8
@@ -60,5 +60,4 @@ data:
       max: 2.0
 training:
   max_steps: 50000
-#  max_norm_d: 2
   ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
