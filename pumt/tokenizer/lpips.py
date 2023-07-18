@@ -7,8 +7,6 @@ import torch
 import torch.nn as nn
 from torchvision import models as tvm
 
-from pumt.tokenizer.utils import ensure_rgb
-
 # convert [-1, 1] to ImageNet normalized
 class InputNormLayer(nn.Module):
     mean: torch.Tensor
@@ -29,7 +27,7 @@ class InputNormLayer(nn.Module):
         )
 
     def forward(self, x: torch.Tensor):
-        return (ensure_rgb(x) - self.mean) / self.std
+        return (x - self.mean) / self.std
 
 class LPIPS(nn.Module):
     # Learned perceptual metric

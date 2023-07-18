@@ -1,34 +1,37 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-import cytoolz
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from lightning import LightningDataModule
-from torch.utils.data import WeightedRandomSampler
+import torch
+from torch.utils.data import Dataset as TorchDataset, Sampler
 
 from luolib.types import RangeTuple
 from luolib.utils import DataKey
-from monai.data import DataLoader, Dataset
+from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
+from monai.transforms import apply_transform
+from pumt.conv import SpatialTensor
 
 from pumt.reader import PUMTReader
-from pumt.transforms import PrepareInputD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
+from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
 
 DATA_ROOT = Path('datasets-PUMT')
 
 @dataclass(kw_only=True)
 class DataLoaderConf:
     train_batch_size: int
-    val_batch_size: int = 4
-    num_train_steps: int
+    val_batch_size: int = 1  # or help me write another distributed batch sampler for validation
+    num_train_batches: int
     num_workers: int = 8
 
 @dataclass(kw_only=True)
 class TransformConf:
     train_tz: int
     val_tz: int = 4
-    train_tx: RangeTuple
+    train_tx: int
     val_tx: int = 12
     rotate_p: float = 0.3
     scale_z_p: float = 0.3
@@ -37,6 +40,94 @@ class TransformConf:
     train_scale_x: RangeTuple
     val_scale_x: float = 1.5
     stride: int = 16
+
+class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
+    def __init__(
+        self,
+        data: list[dict],
+        num_batches: int,
+        trans_conf: TransformConf,
+        num_replicas: int,
+        rank: int,
+        batch_size: int | None = None,
+        weight: torch.Tensor | None = None,
+        buffer_size: int = 16384,
+    ):
+        super().__init__(data)
+        self.data = data
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.trans_conf = trans_conf
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.buffer_size = buffer_size
+        self.weight = weight
+
+    def __len__(self):
+        return self.num_batches
+
+    def __iter__(self):
+        remain_batches = self.num_batches * self.num_replicas
+        trans_conf = self.trans_conf
+        bucket = {}
+        next_rank = 0
+        while remain_batches > 0:
+            for i in self.weight.multinomial(self.buffer_size).tolist():
+                data = self.data[i]
+                shape = np.array([data[f'shape-{i}'] for i in range(3)])
+                origin_size_x = min(shape[1:])
+                spacing = np.array([data[f'space-{i}'] for i in range(3)])
+                spacing_z = spacing[0]
+                spacing_x = min(spacing[1:])
+                # di: how much to downsample along axis i
+                dx = trans_conf.stride
+                # ti: n. tokens along axis i
+                tx = trans_conf.train_tx
+                size_x = tx * dx
+                if np.random.uniform() < trans_conf.scale_x_p:
+                    scale_x = np.random.uniform(
+                        trans_conf.train_scale_x.min * origin_size_x / size_x,
+                        min(origin_size_x / size_x, trans_conf.train_scale_x.max),
+                    )
+                else:
+                    scale_x = 1.
+                if spacing_z <= 3 * spacing_x and np.random.uniform() < trans_conf.scale_z_p:
+                    scale_z = np.random.uniform(*trans_conf.scale_z)
+                else:
+                    scale_z = 1.
+                # ratio of spacing z / spacing x
+                rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
+                aniso_d = int(rz).bit_length() - 1
+                dz = dx >> aniso_d
+                if shape[0] == 1:
+                    tz = 1
+                else:
+                    tz = trans_conf.train_tz
+                trans_info = {
+                    'aniso_d': aniso_d,
+                    'scale': (scale_z, scale_x, scale_x),
+                    'size': (tz * dz, size_x, size_x),
+                }
+                bucket.setdefault(aniso_d, []).append((i, trans_info))
+                if len(batch := bucket[aniso_d]) == self.batch_size:
+                    if next_rank == self.rank:
+                        yield batch
+                    next_rank = (next_rank + 1) % self.num_replicas
+                    remain_batches -= 1
+                    bucket.pop(aniso_d)
+                    if remain_batches == 0:
+                        break
+
+class TokenizerDataset(TorchDataset):
+    def __init__(self, data: list[dict], transform: Callable):
+        self.data = data
+        self.transform = transform
+
+    def __getitem__(self, item: tuple[int, dict]):
+        index, trans = item
+        data = dict(self.data[index])
+        data['_trans'] = trans
+        return apply_transform(self.transform, data)
 
 class TokenizerDataModule(LightningDataModule):
     def __init__(
@@ -51,9 +142,9 @@ class TokenizerDataModule(LightningDataModule):
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
             dataset_weight = dataset_weights.get(dataset_name, 1.)
-            meta = pd.read_csv(dataset_dir / 'images-meta.csv', dtype={'key': 'string'}).set_index('key')
+            meta = pd.read_csv(dataset_dir / 'images-meta.csv', dtype={'key': 'string'})
             meta['weight'] *= dataset_weight
-            meta[DataKey.IMG] = meta.index.map(lambda key: dataset_dir / 'data' / f'{key}.npz')
+            meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npz')
             for modality in meta['modality'].unique():
                 sub_meta = meta[meta['modality'] == modality]
                 val_sample = sub_meta.sample(1, weights=sub_meta['weight'])
@@ -61,7 +152,6 @@ class TokenizerDataModule(LightningDataModule):
                 self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
-        self.world_size = None
 
     def train_transform(self) -> Callable:
         trans_conf = self.trans_conf
@@ -69,32 +159,31 @@ class TokenizerDataModule(LightningDataModule):
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
                 NormalizeIntensityD(),
-                RandAffineCropD(
-                    trans_conf.train_tz,
-                    trans_conf.train_tx,
-                    trans_conf.rotate_p,
-                    trans_conf.scale_x_p,
-                    trans_conf.train_scale_x,
-                    trans_conf.scale_z_p,
-                    trans_conf.scale_z,
-                    trans_conf.stride,
-                ),
-                PrepareInputD(),
+                RandAffineCropD(trans_conf.rotate_p),
+                AsSpatialTensorD(),
             ],
             lazy=True,
         )
 
-    def train_dataloader(self):
+    @staticmethod
+    def collate_fn(batch: list[SpatialTensor]):
+        for i in range(1, len(batch)):
+            assert batch[0].aniso_d == batch[i].aniso_d
+        return torch.stack(batch)
+
+    def train_dataloader(self, world_size: int = 1, rank: int = 0):
         conf = self.dl_conf
+        data = self.train_data.to_dict('records')
+        weight = torch.from_numpy(self.train_data['weight'].to_numpy())
         return DataLoader(
-            Dataset(self.train_data.to_dict('records'), self.train_transform()),
+            TokenizerDataset(data, self.train_transform()),
             conf.num_workers,
-            batch_size=conf.train_batch_size,
-            sampler=WeightedRandomSampler(
-                self.train_data['weight'].to_numpy(),
-                conf.num_train_steps * conf.train_batch_size * self.world_size,
+            batch_sampler=DistributedTokenizerBatchSampler(
+                data, conf.num_train_batches, self.trans_conf,
+                world_size, rank,
+                conf.train_batch_size, weight,
             ),
-            # collate_fn=cytoolz.identity,
+            collate_fn=self.collate_fn,
             pin_memory=True,
             persistent_workers=conf.num_workers > 0,
         )
@@ -111,16 +200,17 @@ class TokenizerDataModule(LightningDataModule):
                     trans_conf.val_scale_x,
                     trans_conf.stride,
                 ),
-                PrepareInputD(),
+                AsSpatialTensorD(),
             ],
             lazy=True,
         )
 
     def val_dataloader(self):
         conf = self.dl_conf
+        data = self.val_data.to_dict('records')
         return DataLoader(
-            Dataset(self.val_data.to_dict('records'), self.val_transform()),
+            MONAIDataset(data, self.val_transform()),
             conf.num_workers,
-            batch_size=conf.val_batch_size,
-            # collate_fn=cytoolz.identity,
+            batch_size=1,
+            collate_fn=self.collate_fn,
         )
