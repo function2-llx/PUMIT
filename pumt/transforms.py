@@ -112,12 +112,13 @@ class CenterScaleCropD(mt.LazyTransform):
                 mt.Affine(scale_params=(1., scale_x, scale_x), image_only=True),
             ],
             lazy=self.lazy if lazy is None else lazy,
+            apply_pending=False,
         )
         data[DataKey.IMG] = cropper(img)
         return data
 
 class NormalizeIntensityD(mt.Transform):
-    def __init__(self, b_min: float = 0., b_max: float = 1.):
+    def __init__(self, b_min: float, b_max: float):
         self.b_min = b_min
         self.b_max = b_max
 
@@ -141,7 +142,7 @@ class PrepareInputD(mt.Transform):
         img: MetaTensor = data[self.img_key]
         spacing = img.pixdim
         # make x- and y-axis always be downsampled
-        img_tensor = img.as_tensor()
+        img_tensor = img.as_tensor
         spacing[0] = max(spacing[0], min(spacing[1:]))
         return {
             self.img_key: img_tensor * 2 - 1,

@@ -2,15 +2,19 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cytoolz
+import math
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from lightning import LightningDataModule
-from torch.utils.data import WeightedRandomSampler
+import torch
+from torch.utils.data import Sampler, WeightedRandomSampler
 
 from luolib.types import RangeTuple
 from luolib.utils import DataKey
 from monai.data import DataLoader, Dataset
 from monai import transforms as mt
+from monai.transforms import apply_transform
 
 from pumt.reader import PUMTReader
 from pumt.transforms import PrepareInputD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
@@ -28,7 +32,7 @@ class DataLoaderConf:
 class TransformConf:
     train_tz: int
     val_tz: int = 4
-    train_tx: RangeTuple
+    train_tx: int = 8
     val_tx: int = 12
     rotate_p: float = 0.3
     scale_z_p: float = 0.3
@@ -37,6 +41,67 @@ class TransformConf:
     train_scale_x: RangeTuple
     val_scale_x: float = 1.5
     stride: int = 16
+
+class TokenizerBatchSampler(Sampler[list[int]]):
+    def __init__(self, meta: list[dict], batch_size: int, num_batches: int, trans_conf: TransformConf, buffer_size: int = 4096):
+        super().__init__(meta)
+        self.meta = meta
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.trans_conf = trans_conf
+        self.buffer_size = buffer_size
+        self.weight = torch.tensor([x['weight'] for x in meta])
+
+    def __iter__(self):
+        remain_batches = self.num_batches
+        trans_conf = self.trans_conf
+        while remain_batches > 0:
+            bucket = {}
+            for i in self.weight.multinomial(self.buffer_size).tolist():
+                meta = self.meta[i]
+                shape = np.array([meta[f'shape-{i}'] for i in range(3)])
+                origin_size_x = min(shape[1:])
+                spacing = np.array([meta[f'space-{i}'] for i in range(3)])
+                spacing_z = spacing[0]
+                spacing_x = min(spacing[1:])
+                # di: how much to downsample along axis i
+                dx = trans_conf.stride
+                # ti: n. tokens along axis i
+                tx = trans_conf.train_tx
+                size_x = tx * dx
+                if np.random.uniform() < trans_conf.scale_x_p:
+                    scale_x = np.random.uniform(
+                        trans_conf.train_scale_x.min * origin_size_x / size_x,
+                        min(origin_size_x / size_x, trans_conf.train_scale_x.max),
+                    )
+                else:
+                    scale_x = 1.
+                if spacing_z <= 3 * spacing_x and np.random.uniform() < trans_conf.scale_z_p:
+                    scale_z = np.random.uniform(*trans_conf.scale_z)
+                else:
+                    scale_z = 1.
+                # ratio of spacing z / spacing x
+                rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
+                aniso_d = int(rz).bit_length() - 1
+                meta['scale'] = (scale_z, scale_x, scale_x)
+                dz = dx >> aniso_d
+                if shape[0] == 1:
+                    tz = 1
+                else:
+                    tz = trans_conf.train_tz
+                meta['sample size'] = (tz * dz, size_x, size_x)
+                bucket.setdefault(aniso_d, []).append(i)
+                if len(batch := bucket[aniso_d]) == self.batch_size:
+                    yield batch
+                    remain_batches -= 1
+                    batch.clear()
+
+class DataFrameDataset(Dataset):
+    data: pd.DataFrame
+
+    def _transform(self, index: int):
+        data_i = self.data.iloc[index].to_dict()
+        return apply_transform(self.transform, data_i) if self.transform is not None else data_i
 
 class TokenizerDataModule(LightningDataModule):
     def __init__(
@@ -68,7 +133,7 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                NormalizeIntensityD(),
+                NormalizeIntensityD(0., 1.),
                 RandAffineCropD(
                     trans_conf.train_tz,
                     trans_conf.train_tx,
@@ -104,7 +169,7 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                NormalizeIntensityD(),
+                NormalizeIntensityD(0., 1.),
                 CenterScaleCropD(
                     trans_conf.val_tz,
                     trans_conf.val_tx,

@@ -68,20 +68,8 @@ def main():
     torch.set_float32_matmul_precision('high')
     args = parse_args()
     training_args: TrainingArguments = args.training
-    logger = WandbLogger(
-        'tokenizer',
-        training_args.output_dir,
-        project='PUMT',
-    )
-    fabric = Fabric(
-        precision='16-mixed',
-        # plugins=MixedPrecision(
-        #     '16-mixed',
-        #     'cuda',
-        #     # GradScaler(init_scale=4096),
-        # ),
-        loggers=logger,
-    )
+    logger = WandbLogger('tokenizer', training_args.output_dir, project='PUMT')
+    fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
     ckpt = torch.load(training_args.ckpt_path, map_location='cpu')
     vqvae: VQVAEModel = args.vqvae
