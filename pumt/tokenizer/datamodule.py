@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
 
-from luolib import transforms as lt
 from luolib.types import tuple2_t
 from luolib.utils import DataKey
 from monai.data import Dataset as MONAIDataset, DataLoader
@@ -16,7 +15,7 @@ from monai import transforms as mt
 
 from pumt.conv import SpatialTensor
 from pumt.reader import PUMTReader
-from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD
+from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, ensure_rgb
 
 DATA_ROOT = Path('PUMT-normalized')
 
@@ -71,6 +70,8 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         self.rank = rank
         self.buffer_size = buffer_size
         self.weight = weight
+        from torch.distributed import get_rank
+        print(f'[rank {get_rank()}]: ws={num_replicas}, rank={rank}')
 
     def __len__(self):
         return self.num_batches
@@ -80,6 +81,7 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         trans_conf = self.trans_conf
         bucket = {}
         next_rank = 0
+        cnt = 0
         while remain_batches > 0:
             for i in self.weight.multinomial(self.buffer_size).tolist():
                 data = self.data[i]
@@ -119,8 +121,9 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 }
                 bucket.setdefault(aniso_d, []).append((i, trans_info))
                 if len(batch := bucket[aniso_d]) == self.batch_size:
-                    if next_rank == self.rank:
+                    if next_rank == self.rank and cnt >= 4 * 1200:
                         yield batch
+                    cnt += 1
                     next_rank = (next_rank + 1) % self.num_replicas
                     remain_batches -= 1
                     bucket.pop(aniso_d)
@@ -167,29 +170,33 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+                # mt.ToTensorD(DataKey.IMG, device='cuda'),
                 RandAffineCropD(trans_conf.rotate_p),
                 *[
                     mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
                     for i in range(3)
                 ],
-                mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
-                mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
-                lt.ClampIntensityD(DataKey.IMG),
-                lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
-                mt.OneOf([
-                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
-                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
-                ]),
+                # mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
+                # mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
+                # lt.ClampIntensityD(DataKey.IMG),
+                # lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
+                # mt.OneOf([
+                #     lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
+                #     lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
+                # ]),
+                # mt.LambdaD(DataKey.IMG, MetaTensor.as_tensor, track_meta=False),
+                # operator.itemgetter(DataKey.IMG),
+                # ensure_rgb,
                 AsSpatialTensorD(),
             ],
             lazy=True,
         )
 
     @staticmethod
-    def collate_fn(batch: list[SpatialTensor]):
-        for i in range(1, len(batch)):
-            assert batch[0].aniso_d == batch[i].aniso_d
-        return torch.stack(batch)
+    def collate_fn(batch: list[dict]):
+        tensor_list, [aniso_d, *aniso_d_list] = zip(*batch)
+        assert (np.array(aniso_d_list) == aniso_d).all()
+        return torch.stack(tensor_list), aniso_d
 
     def train_dataloader(self, world_size: int = 1, rank: int = 0):
         conf = self.dl_conf
@@ -203,7 +210,7 @@ class TokenizerDataModule(LightningDataModule):
                 world_size, rank,
                 conf.train_batch_size, weight,
             ),
-            prefetch_factor=8,
+            prefetch_factor=8 if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,
             pin_memory=True,
             persistent_workers=conf.num_workers > 0,

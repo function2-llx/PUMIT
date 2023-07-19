@@ -50,12 +50,14 @@ data:
   dataset_weights:
     CheXpert: 0.03
     NIHChestX-ray: 0.03
+    RSNA-2020-PED: 0.2
+    RSNA-2022-CSFD: 0.5
   dl_conf:
-    train_batch_size: 8
+    train_batch_size: 4
   trans_conf:
     train_tz: 3
     train_tx: 8
     train_scale_x: [0.75, 2.0]
 training:
-  max_steps: 50000
+  max_steps: 200000
   ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt

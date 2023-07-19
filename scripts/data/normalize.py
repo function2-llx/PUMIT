@@ -28,7 +28,7 @@ class NormalizeIntensityD(mt.Transform):
         return data
 
 src_dir = Path('datasets-PUMT')
-save_dir = Path('PUMT-normalized')
+save_dir = Path('PUMT-normalized-verse-test')
 
 loader = mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True)
 normalizer = NormalizeIntensityD()
@@ -44,13 +44,19 @@ def process(meta: dict, dataset_name: str, device_id: int):
 def main():
     for dataset_dir in src_dir.iterdir():
         dataset_name = dataset_dir.name
+        if dataset_name != 'VerSe':
+            continue
         meta = pd.read_csv(dataset_dir / 'images-meta.csv', dtype={'key': 'string'})
         meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npz')
         (save_dir / dataset_name / 'data').mkdir(parents=True)
         shutil.copy2(dataset_dir / 'images-meta.csv', save_dir / dataset_name / 'images-meta.csv')
+        data_list = [
+            x
+            for x in meta.to_dict('records') if x['key'] == 'sub-verse415'
+        ]
         process_map(
             process,
-            meta.to_dict('records'),
+            data_list,
             it.repeat(dataset_name),
             it.cycle(range(torch.cuda.device_count())),
             desc=dataset_name,

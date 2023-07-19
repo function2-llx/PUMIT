@@ -76,7 +76,4 @@ def ensure_rgb(x: torch.Tensor, enable: bool = True) -> torch.Tensor:
 
 class AsSpatialTensorD(mt.Transform):
     def __call__(self, data: Mapping[Hashable]):
-        return SpatialTensor(
-            ensure_rgb(data[DataKey.IMG].as_tensor()),
-            data['_trans']['aniso_d'],
-        )
+        return ensure_rgb(data[DataKey.IMG].as_tensor()), data['_trans']['aniso_d']

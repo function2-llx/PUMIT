@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import cast
 
 from jsonargparse import ActionConfigFile, ArgumentParser
-from lightning import Fabric as LightningFabric
+from lightning.fabric import Fabric as LightningFabric
 from lightning.pytorch.cli import instantiate_class
 from lightning.pytorch.loggers import WandbLogger
 import torch
@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from luolib.models.utils import create_param_groups, load_ckpt, split_weight_decay_keys
 from luolib.types import LRSchedulerConfig
+from pumt.conv import SpatialTensor
 from pumt.tokenizer import TokenizerDataModule, VQVAEModel
 from pumt.tokenizer.loss import VQGANLoss
 
@@ -122,6 +123,7 @@ class Timer:
         print(f'step {self.step} {info}: {elapsed:.2f} ms')
 
 def main():
+    # torch.multiprocessing.set_start_method('spawn', force=True)
     torch.set_float32_matmul_precision('high')
     parser = get_parser()
     raw_args = parser.parse_args()
@@ -167,8 +169,9 @@ def main():
     )
 
     metric_dict = MetricDict()
-    for step, x in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
+    for step, (x, aniso_d) in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
         x = 2 * x - 1
+        x = SpatialTensor(x, aniso_d)
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, quant_out = vqvae(x)
         loss_module.discriminator.requires_grad_(False)

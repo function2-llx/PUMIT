@@ -31,7 +31,7 @@ class ImageFile:
 
 class DatasetProcessor(ABC):
     name: str
-    max_workers: int = 16
+    max_workers: int = 4
     chunksize: int = 1
 
     @property
@@ -47,7 +47,7 @@ class DatasetProcessor(ABC):
         pass
 
     # default loader for all image files
-    def get_loader(self) -> Callable[[Path], MetaTensor]:
+    def get_loader(self, cuda_id: int) -> Callable[[Path], MetaTensor]:
         raise NotImplementedError
 
     @abstractmethod
@@ -56,6 +56,7 @@ class DatasetProcessor(ABC):
 
     def process(self):
         files = self.get_image_files()
+        assert len(files) == len(set(file.key for file in files))
         if len(files) == 0:
             return
         if (images_meta_path := self.output_root / 'images-meta.csv').exists():
@@ -71,7 +72,14 @@ class DatasetProcessor(ABC):
         if len(files) == 0:
             remained_meta = pd.DataFrame()
         else:
-            results = process_map(self.process_file, files, max_workers=self.max_workers, chunksize=self.chunksize, ncols=80)
+            results = process_map(
+                self.process_file,
+                files,
+                it.cycle(range(torch.cuda.device_count())),
+                max_workers=self.max_workers,
+                chunksize=self.chunksize,
+                ncols=80,
+            )
             remained_meta = pd.DataFrame.from_records(cytoolz.concat(results), index='key')
         meta = pd.concat([old_meta, remained_meta])
         meta.to_csv(images_meta_path)
@@ -80,10 +88,11 @@ class DatasetProcessor(ABC):
     def process_file(
         self,
         file: ImageFile,
+        cuda_id: int,
         cropper: Callable[[MetaTensor], MetaTensor] | None = None,
     ):
         if file.loader is None:
-            loader = self.get_loader()
+            loader = self.get_loader(cuda_id)
         else:
             loader = file.loader
         try:
@@ -162,12 +171,12 @@ class Default3DLoaderMixin:
     reader = None
     orientation = 'RAS'
 
-    def get_loader(self) -> Callable[[Path], MetaTensor]:
+    def get_loader(self, cuda_id: int) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
             mt.LoadImage(self.reader, image_only=True, dtype=None, ensure_channel_first=True),
             mt.Orientation(self.orientation),
             MetaTensor.contiguous,
-            MetaTensor.cuda,
+            mt.ToDevice(f'cuda:{cuda_id}'),
         ])
 
 class NaturalImageLoaderMixin:
@@ -189,9 +198,9 @@ class NaturalImageLoaderMixin:
         img.affine[0, 0] = 1e8
         return img
 
-    def load(self, path: Path):
+    def load(self, path: Path, cuda_id: int):
         from torchvision.io import read_image
-        img = read_image(str(path)).cuda().div(255)
+        img = read_image(str(path)).to(f'cuda:{cuda_id}').div(255)
         img = self.crop(img)
         spatial_shape = (1, *img.shape[1:])
         if min(img.shape[1:]) > self.max_smaller_size:
@@ -200,14 +209,11 @@ class NaturalImageLoaderMixin:
         img.meta[MetaKeys.SPATIAL_SHAPE] = spatial_shape
         return img
 
-    def get_loader(self) -> Callable[[Path], MetaTensor]:
+    def get_loader(self, cuda_id: int) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
-            self.load,
+            cytoolz.partial(self.load, cuda_id=cuda_id),
             self.check_and_adapt_to_3d,
         ])
-
-    def __call__(self, path: Path):
-        return self.get_loader()(path)
 
 class ValueBasedCropper(ABC):
     @abstractmethod
@@ -970,11 +976,13 @@ class TotalSegmentatorProcessor(Default3DLoaderMixin, PercentileCropperMixin, Da
 
 class VerSeProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'VerSe'
+    max_workers = 1
 
     def get_image_files(self) -> Sequence[ImageFile]:
+        suffix = '.nii.gz'
         return [
-            ImageFile(path.parent.name, 'CT', path)
-            for path in self.dataset_root.glob('*/rawdata/*/*.nii.gz')
+            ImageFile(path.name[:-len(suffix)], 'CT', path)
+            for path in self.dataset_root.glob(f'*/rawdata/*/*{suffix}')
         ]
 
 class VSSEGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
