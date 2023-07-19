@@ -39,6 +39,8 @@ class TrainingArguments:
     max_steps: int
     seed: int = 42
     log_every_n_steps: int = 20
+    save_last_every_n_steps: int = 500
+    plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000
     max_norm_g: int | float | None = None
     max_norm_d: int | float | None = None
@@ -76,6 +78,7 @@ def get_parser():
 class MetricDict(dict):
     num_updates: int = 0
 
+    @torch.no_grad()
     def update_metrics(self, metrics: dict):
         for k, v in metrics.items():
             if k in self:
@@ -84,6 +87,7 @@ class MetricDict(dict):
                 self[k] = v
         self.num_updates += 1
 
+    @torch.no_grad()
     def reduce(self):
         ret = {
             k: v / self.num_updates
@@ -101,12 +105,29 @@ def log_dict_split(fabric: Fabric, split: str, metric_dict: MetricDict, step: in
     }
     fabric.log_dict(metric_dict, step)
 
+
+class Timer:
+    @staticmethod
+    def get_time():
+        from time import monotonic_ns
+        return monotonic_ns() / 1e6
+
+    def __init__(self):
+        self.t = self.get_time()
+        self.step = 0
+
+    def update(self, info: str):
+        elapsed = (t := self.get_time()) - self.t
+        self.t = t
+        print(f'step {self.step} {info}: {elapsed:.2f} ms')
+
 def main():
     torch.set_float32_matmul_precision('high')
     parser = get_parser()
     raw_args = parser.parse_args()
     args = parser.instantiate_classes(raw_args)
     training_args: TrainingArguments = args.training
+    training_args.output_dir.mkdir(parents=True, exist_ok=True)
     logger = WandbLogger('tokenizer', training_args.output_dir, project='PUMT')
     fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
@@ -147,6 +168,7 @@ def main():
 
     metric_dict = MetricDict()
     for step, x in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
+        x = 2 * x - 1
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, quant_out = vqvae(x)
         loss_module.discriminator.requires_grad_(False)
@@ -174,20 +196,24 @@ def main():
         optimized_steps = step + 1
         if optimized_steps % training_args.log_every_n_steps == 0:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
-            if fabric.is_global_zero:
-                step_save_dir = img_save_dir / f'step-{optimized_steps}'
-                step_save_dir.mkdir(parents=True)
-                for i in range(x.shape[2]):
-                    save_image((x[0, :, i] + 1) / 2, step_save_dir / f'{i}-origin.png')
-                    save_image((x_rec[0, :, i] + 1) / 2, step_save_dir / f'{i}-rec.png')
+        if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
+            step_save_dir = img_save_dir / f'step-{optimized_steps}'
+            step_save_dir.mkdir(parents=True)
+            for i in range(x.shape[2]):
+                save_image((x[0, :, i] + 1) / 2, step_save_dir / f'{i}-origin.png')
+                save_image((x_rec[0, :, i] + 1) / 2, step_save_dir / f'{i}-rec.png')
+        state = {
+            'vqvae': vqvae,
+            'discriminator': loss_module.discriminator,
+            'optimizer_g': optimizer_g,
+            'optimizer_d': optimizer_d,
+            'step': optimized_steps,
+        }
         if optimized_steps % training_args.save_every_n_steps == 0:
-            fabric.save(ckpt_save_dir / f'step={optimized_steps}.ckpt', {
-                'vqvae': vqvae,
-                'discriminator': loss_module.discriminator,
-                'optimizer_g': optimizer_g,
-                'optimizer_d': optimizer_d,
-                'step': optimized_steps,
-            })
+            fabric.save(ckpt_save_dir / f'step={optimized_steps}.ckpt', state)
+        if optimized_steps % training_args.save_last_every_n_steps == 0:
+            fabric.save(ckpt_save_dir / f'last.ckpt', state)
+
 
 if __name__ == '__main__':
     main()

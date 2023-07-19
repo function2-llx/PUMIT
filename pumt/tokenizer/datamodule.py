@@ -1,24 +1,24 @@
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+from lightning import LightningDataModule
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from lightning import LightningDataModule
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
 
-from luolib.types import RangeTuple
+from luolib import transforms as lt
+from luolib.types import tuple2_t
 from luolib.utils import DataKey
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
-from monai.transforms import apply_transform
+
 from pumt.conv import SpatialTensor
-
 from pumt.reader import PUMTReader
-from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, NormalizeIntensityD
+from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD
 
-DATA_ROOT = Path('datasets-PUMT')
+DATA_ROOT = Path('PUMT-normalized')
 
 @dataclass(kw_only=True)
 class DataLoaderConf:
@@ -34,11 +34,20 @@ class TransformConf:
     train_tx: int
     val_tx: int = 12
     rotate_p: float = 0.3
+    scale_z: tuple2_t[float] = (0.8, 1.25)
     scale_z_p: float = 0.3
-    scale_z: RangeTuple = field(default_factory=lambda: RangeTuple(0.8, 1.25))
+    train_scale_x: tuple2_t[float]
     scale_x_p: float = 0.5
-    train_scale_x: RangeTuple
     val_scale_x: float = 1.5
+    flip_p: float = 0.5
+    scale_intensity: float = 0.25
+    scale_intensity_p: float = 0.15
+    shift_intensity: float = 0.1
+    shift_intensity_p: float = 0.
+    adjust_contrast: tuple2_t[float] = (0.75, 1.25)
+    adjust_contrast_p: float = 0.15
+    gamma: tuple2_t[float] = (0.7, 1.5)
+    gamma_p: float = 0.3
     stride: int = 16
 
 class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
@@ -86,8 +95,8 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 size_x = tx * dx
                 if np.random.uniform() < trans_conf.scale_x_p:
                     scale_x = np.random.uniform(
-                        trans_conf.train_scale_x.min * origin_size_x / size_x,
-                        min(origin_size_x / size_x, trans_conf.train_scale_x.max),
+                        trans_conf.train_scale_x[0] * origin_size_x / size_x,
+                        min(origin_size_x / size_x, trans_conf.train_scale_x[1]),
                     )
                 else:
                     scale_x = 1.
@@ -127,7 +136,7 @@ class TokenizerDataset(TorchDataset):
         index, trans = item
         data = dict(self.data[index])
         data['_trans'] = trans
-        return apply_transform(self.transform, data)
+        return mt.apply_transform(self.transform, data)
 
 class TokenizerDataModule(LightningDataModule):
     def __init__(
@@ -158,8 +167,19 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                NormalizeIntensityD(),
                 RandAffineCropD(trans_conf.rotate_p),
+                *[
+                    mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
+                    for i in range(3)
+                ],
+                mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
+                mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
+                lt.ClampIntensityD(DataKey.IMG),
+                lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
+                mt.OneOf([
+                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
+                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
+                ]),
                 AsSpatialTensorD(),
             ],
             lazy=True,
@@ -183,6 +203,7 @@ class TokenizerDataModule(LightningDataModule):
                 world_size, rank,
                 conf.train_batch_size, weight,
             ),
+            prefetch_factor=8,
             collate_fn=self.collate_fn,
             pin_memory=True,
             persistent_workers=conf.num_workers > 0,
@@ -193,7 +214,6 @@ class TokenizerDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                NormalizeIntensityD(),
                 CenterScaleCropD(
                     trans_conf.val_tz,
                     trans_conf.val_tx,

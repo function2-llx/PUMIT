@@ -51,13 +51,11 @@ data:
     CheXpert: 0.03
     NIHChestX-ray: 0.03
   dl_conf:
-    train_batch_size: 4
+    train_batch_size: 8
   trans_conf:
     train_tz: 3
     train_tx: 8
-    train_scale_x:
-      min: 0.75
-      max: 2.0
+    train_scale_x: [0.75, 2.0]
 training:
   max_steps: 50000
   ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt

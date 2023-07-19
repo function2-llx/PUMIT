@@ -68,19 +68,6 @@ class CenterScaleCropD(mt.LazyTransform):
         data[DataKey.IMG] = cropper(img)
         return data
 
-class NormalizeIntensityD(mt.Transform):
-    def __call__(self, data: Mapping[Hashable, ...]):
-        data = dict(data)
-        img: MetaTensor = data[DataKey.IMG]
-        modality: str = data['modality']
-
-        if modality.startswith('RGB') or modality.startswith('gray'):
-            normalizer = mt.ScaleIntensityRange(0., 255., 0., 1.)
-        else:
-            normalizer = mt.ScaleIntensityRange(data['p0.5'], data['p99.5'], 0., 1., clip=True)
-        data[DataKey.IMG] = normalizer(img)
-        return data
-
 def ensure_rgb(x: torch.Tensor, enable: bool = True) -> torch.Tensor:
     if enable and x.shape[0] != 3:
         assert x.shape[0] == 1
