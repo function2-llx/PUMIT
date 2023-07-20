@@ -971,6 +971,8 @@ class RSNA2020PEDProcessor(Default3DLoaderMixin, PercentileCropperMixin, Dataset
 class RSNA2022CSFDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'RSNA-2022-CSFD'
     reader = PydicomReader
+    max_workers = 4
+    empty_cache = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -981,6 +983,8 @@ class RSNA2022CSFDProcessor(Default3DLoaderMixin, PercentileCropperMixin, Datase
 
 class STOICProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'STOIC'
+    max_workers = 4
+    empty_cache = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [

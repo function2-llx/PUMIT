@@ -134,7 +134,7 @@ def main():
     fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
     fabric.launch()
-    save_dir = training_args.output_dir / logger.version if fabric.is_global_zero else None
+    save_dir = training_args.output_dir / Path(logger.experiment.dir).parent.name if fabric.is_global_zero else None
     save_dir = fabric.broadcast(save_dir)
     img_save_dir = save_dir / 'images'
     ckpt_save_dir = save_dir / 'checkpoints'
@@ -170,6 +170,7 @@ def main():
 
     metric_dict = MetricDict()
     for step, (x, aniso_d) in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
+        continue
         x = 2 * x - 1
         x = SpatialTensor(x, aniso_d)
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
@@ -197,7 +198,7 @@ def main():
         optimizer_d.zero_grad()
         metric_dict.update_metrics(log_dict)
         optimized_steps = step + 1
-        if optimized_steps % training_args.log_every_n_steps == 0:
+        if optimized_steps % training_args.log_every_n_steps == 0 or optimized_steps == training_args.max_steps:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
         if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
             step_save_dir = img_save_dir / f'step-{optimized_steps}'
@@ -216,7 +217,6 @@ def main():
             fabric.save(ckpt_save_dir / f'step={optimized_steps}.ckpt', state)
         if optimized_steps % training_args.save_last_every_n_steps == 0:
             fabric.save(ckpt_save_dir / f'last.ckpt', state)
-
 
 if __name__ == '__main__':
     main()

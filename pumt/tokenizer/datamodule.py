@@ -57,19 +57,21 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         trans_conf: TransformConf,
         num_replicas: int,
         rank: int,
+        random_state: np.random.RandomState,
         batch_size: int | None = None,
         weight: torch.Tensor | None = None,
         buffer_size: int = 16384,
     ):
         super().__init__(data)
         self.data = data
-        self.batch_size = batch_size
         self.num_batches = num_batches
         self.trans_conf = trans_conf
         self.num_replicas = num_replicas
         self.rank = rank
-        self.buffer_size = buffer_size
+        self.batch_size = batch_size
         self.weight = weight
+        self.R = random_state
+        self.buffer_size = buffer_size
 
     def __len__(self):
         return self.num_batches
@@ -79,7 +81,6 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         trans_conf = self.trans_conf
         bucket = {}
         next_rank = 0
-        cnt = 0
         while remain_batches > 0:
             for i in self.weight.multinomial(self.buffer_size).tolist():
                 data = self.data[i]
@@ -93,25 +94,23 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 # ti: n. tokens along axis i
                 tx = trans_conf.train_tx
                 size_x = tx * dx
-                if np.random.uniform() < trans_conf.scale_x_p:
-                    scale_x = np.random.uniform(
+                if self.R.uniform() < trans_conf.scale_x_p:
+                    # FIXME: the lower bound is inappropriate
+                    scale_x = self.R.uniform(
                         trans_conf.train_scale_x[0] * origin_size_x / size_x,
                         min(origin_size_x / size_x, trans_conf.train_scale_x[1]),
                     )
                 else:
                     scale_x = 1.
-                if spacing_z <= 3 * spacing_x and np.random.uniform() < trans_conf.scale_z_p:
-                    scale_z = np.random.uniform(*trans_conf.scale_z)
+                if spacing_z <= 3 * spacing_x and self.R.uniform() < trans_conf.scale_z_p:
+                    scale_z = self.R.uniform(*trans_conf.scale_z)
                 else:
                     scale_z = 1.
                 # ratio of spacing z / spacing x
                 rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
                 aniso_d = int(rz).bit_length() - 1
                 dz = dx >> aniso_d
-                if shape[0] == 1:
-                    tz = 1
-                else:
-                    tz = trans_conf.train_tz
+                tz = 1 if shape[0] == 1 else trans_conf.train_tz
                 trans_info = {
                     'aniso_d': aniso_d,
                     'scale': (scale_z, scale_x, scale_x),
@@ -119,9 +118,8 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 }
                 bucket.setdefault(aniso_d, []).append((i, trans_info))
                 if len(batch := bucket[aniso_d]) == self.batch_size:
-                    if next_rank == self.rank and cnt >= 4 * 1200:
+                    if next_rank == self.rank:
                         yield batch
-                    cnt += 1
                     next_rank = (next_rank + 1) % self.num_replicas
                     remain_batches -= 1
                     bucket.pop(aniso_d)
@@ -145,12 +143,23 @@ class TokenizerDataModule(LightningDataModule):
         dataset_weights: dict[str, float],
         dl_conf: DataLoaderConf,
         trans_conf: TransformConf,
+        seed: int = 42,
     ):
         super().__init__()
         self.train_data = pd.DataFrame()
         self.val_data = pd.DataFrame()
+        self.R = np.random.RandomState(seed)
+        dataset_names = []
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
+            if (dataset_dir / 'images-meta.csv').exists():
+                dataset_names.append(dataset_name)
+            else:
+                print(f'skip {dataset_name}')
+        # deterministic
+        dataset_names = sorted(dataset_names)
+        for dataset_name in dataset_names:
+            dataset_dir = DATA_ROOT / dataset_name
             dataset_weight = dataset_weights.get(dataset_name, 1.)
             if not (meta_path := dataset_dir / 'images-meta.csv').exists():
                 print(f'skip {dataset_name}')
@@ -163,7 +172,7 @@ class TokenizerDataModule(LightningDataModule):
                     print(f"{dataset_name} missing {pd.isna(meta['modality']).sum()}")
                 else:
                     sub_meta = meta[meta['modality'] == modality]
-                    val_sample = sub_meta.sample(1, weights=sub_meta['weight'])
+                    val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)
                     self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
                     self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
@@ -203,6 +212,7 @@ class TokenizerDataModule(LightningDataModule):
         return torch.stack(tensor_list), aniso_d
 
     def train_dataloader(self, world_size: int = 1, rank: int = 0):
+        # TODO: skip batches when resume training
         conf = self.dl_conf
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
@@ -210,8 +220,10 @@ class TokenizerDataModule(LightningDataModule):
             TokenizerDataset(data, self.train_transform()),
             conf.num_workers,
             batch_sampler=DistributedTokenizerBatchSampler(
-                data, conf.num_train_batches, self.trans_conf,
+                data, conf.num_train_batches,
+                self.trans_conf,
                 world_size, rank,
+                self.R,
                 conf.train_batch_size, weight,
             ),
             prefetch_factor=8 if conf.num_workers > 0 else None,

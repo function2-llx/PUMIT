@@ -1,17 +1,12 @@
-from typing import Any
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
-import torch.distributed
 
-from monai.config import PathLike
-from monai.data import ImageReader, is_supported_format
 from monai import transforms as mt
-from monai.utils import ensure_tuple, MetaKeys
-
-def get_time_ms():
-    from time import monotonic_ns
-    return monotonic_ns() / 1e6
+from monai.config import PathLike
+from monai.data import ImageReader
+from monai.utils import MetaKeys, ensure_tuple
 
 class PUMTReader(mt.Randomizable, ImageReader):
     def __init__(self, max_slices: int | None = None):
