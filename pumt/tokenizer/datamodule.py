@@ -17,7 +17,7 @@ from monai import transforms as mt
 from pumt.reader import PUMTReader
 from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD, ensure_rgb
 
-DATA_ROOT = Path('PUMT-normalized')
+DATA_ROOT = Path('processed-data')
 
 @dataclass(kw_only=True)
 class DataLoaderConf:
@@ -70,8 +70,6 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         self.rank = rank
         self.buffer_size = buffer_size
         self.weight = weight
-        from torch.distributed import get_rank
-        print(f'[rank {get_rank()}]: ws={num_replicas}, rank={rank}')
 
     def __len__(self):
         return self.num_batches
@@ -159,12 +157,15 @@ class TokenizerDataModule(LightningDataModule):
                 continue
             meta = pd.read_csv(meta_path, dtype={'key': 'string'})
             meta['weight'] *= dataset_weight
-            meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npz')
+            meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
-                sub_meta = meta[meta['modality'] == modality]
-                val_sample = sub_meta.sample(1, weights=sub_meta['weight'])
-                self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
-                self.val_data = pd.concat([self.val_data, val_sample])
+                if pd.isna(modality):
+                    print(f"{dataset_name} missing {pd.isna(meta['modality']).sum()}")
+                else:
+                    sub_meta = meta[meta['modality'] == modality]
+                    val_sample = sub_meta.sample(1, weights=sub_meta['weight'])
+                    self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
+                    self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
 
@@ -223,7 +224,7 @@ class TokenizerDataModule(LightningDataModule):
         trans_conf = self.trans_conf
         return mt.Compose(
             [
-                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+                mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
                 CenterScaleCropD(
                     trans_conf.val_tz,
                     trans_conf.val_tx,

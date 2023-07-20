@@ -1,5 +1,5 @@
 import abc
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable
 from typing import Literal
 
 import einops
@@ -11,6 +11,9 @@ from luolib.types import param3_t
 from monai.utils import InterpolateMode, ensure_tuple_rep
 
 class SpatialTensor(torch.Tensor):
+    # gradient checkpointing will not work for this class
+    # https://github.com/pytorch/pytorch/issues/105644
+
     @staticmethod
     def __new__(cls, x, aniso_d: int, *args, **kwargs):
         return torch.as_tensor(x, *args, **kwargs).as_subclass(SpatialTensor)

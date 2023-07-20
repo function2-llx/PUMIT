@@ -34,6 +34,7 @@ class DatasetProcessor(ABC):
     name: str
     max_workers: int = 8
     chunksize: int = 1
+    empty_cache: bool = False
 
     @property
     def dataset_root(self):
@@ -65,7 +66,7 @@ class DatasetProcessor(ABC):
         if len(files) == 0:
             return
         if (images_meta_path := self.output_root / 'images-meta.csv').exists():
-            images_meta = pd.read_csv(images_meta_path, index_col='key')
+            images_meta = pd.read_csv(images_meta_path, index_col='key', dtype={'key': 'string'})
             remained_mask = images_meta['modality'].isna()
             remained_keys = images_meta.index[remained_mask]
             old_meta = images_meta[~remained_mask]
@@ -111,6 +112,9 @@ class DatasetProcessor(ABC):
         except Exception:
             print(file.path)
             return [{'key': file.key, 'origin': file.path}]
+        finally:
+            if self.empty_cache:
+                torch.cuda.empty_cache()
 
     def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
         if isinstance(file.modality, str):
@@ -821,6 +825,8 @@ class MSDColonProcessor(MSDProcessor):
 class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor):
     name = 'NCTCT'
     reader = PydicomReader
+    max_workers = 4
+    empty_cache: bool = True
 
     @property
     def dataset_root(self):
@@ -943,6 +949,7 @@ class ProstateMRIProcessor(Default3DLoaderMixin, PercentileCropperMixin, Dataset
 
 class RibFracProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'RibFrac'
+    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         suffix = '-image.nii.gz'
@@ -1036,7 +1043,7 @@ def main():
     parser.add_argument('--ie', action='store_true')
     args = parser.parse_args()
     if args.all:
-        exclude = set(args.exclude)
+        exclude = set(args.exclude + ['MSDBrainTumour'])
         datasets = [
             name for cls in globals().values()
             if inspect.isclass(cls) and issubclass(cls, DatasetProcessor) and hasattr(cls, 'name')
@@ -1052,14 +1059,14 @@ def main():
         else:
             processor = processor_cls()
             print(dataset)
-            if args.ie:
-                try:
-                    processor.process()
-                except Exception:
+            try:
+                processor.process()
+            except Exception as e:
+                if args.ie:
                     import traceback
                     print(traceback.format_exc())
-            else:
-                processor.process()
+                else:
+                    raise e
 
 if __name__ == '__main__':
     main()
