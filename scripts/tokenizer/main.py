@@ -107,7 +107,6 @@ def log_dict_split(fabric: Fabric, split: str, metric_dict: MetricDict, step: in
     }
     fabric.log_dict(metric_dict, step)
 
-
 class Timer:
     @staticmethod
     def get_time():
@@ -124,7 +123,6 @@ class Timer:
         print(f'step {self.step} {info}: {elapsed:.2f} ms')
 
 def main():
-    # torch.multiprocessing.set_start_method('spawn', force=True)
     torch.set_float32_matmul_precision('high')
     parser = get_parser()
     raw_args = parser.parse_args()
