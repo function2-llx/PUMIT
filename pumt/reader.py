@@ -6,42 +6,36 @@ import torch.distributed
 
 from monai.config import PathLike
 from monai.data import ImageReader, is_supported_format
+from monai import transforms as mt
 from monai.utils import ensure_tuple, MetaKeys
 
 def get_time_ms():
     from time import monotonic_ns
     return monotonic_ns() / 1e6
 
-class PUMTReader(ImageReader):
-    def verify_suffix(self, filename: Sequence[PathLike] | PathLike) -> bool:
-        return is_supported_format(filename, ['npz'])
+class PUMTReader(mt.Randomizable, ImageReader):
+    def __init__(self, max_slices: int | None = None):
+        self.max_slices = max_slices
 
-    def read(self, data: Sequence[PathLike] | PathLike, **kwargs) -> Sequence[Any] | Any:
+    def verify_suffix(self, filename: Sequence[PathLike] | PathLike) -> bool:
+        return True
+
+    def read(self, filepaths: Sequence[PathLike] | PathLike, **kwargs) -> Sequence[Any] | Any:
         img_ = []
 
-        filenames: Sequence[PathLike] = ensure_tuple(data)
-        for name in filenames:
-            img = np.load(name)
-            img.name = name
+        filepaths: Sequence[PathLike] = ensure_tuple(filepaths)
+        for filepath in filepaths:
+            img: np.memmap = np.load(filepath, 'r')
+            if self.max_slices is not None and (r := img.shape[1] - self.max_slices) > 0:
+                start_slice = self.R.randint(r)
+                img = img[:, start_slice:start_slice + self.max_slices]
             img_.append(img)
-        return img_ if len(filenames) > 1 else img_[0]
+        return img_ if len(filepaths) > 1 else img_[0]
 
-    def get_data(self, img) -> tuple[np.ndarray, dict]:
-        t = get_time_ms()
-        try:
-            array = img['array']
-            affine = img['affine']
-            if get_time_ms() - t > 5000:
-                print(img.name)
-        except Exception as e:
-            rank = torch.distributed.get_rank()
-            print(f'\n\n[rank {rank}] read failed1:', img.name)
-            print(f'\n\n[rank {rank}] read failed2:', img.name)
-            print(f'\n\n[rank {rank}] read failed3:', img.name)
-            raise e
-        return array, {
-            MetaKeys.AFFINE: affine,
-            MetaKeys.ORIGINAL_AFFINE: affine,
-            MetaKeys.SPATIAL_SHAPE: array.shape[1:],
+    def get_data(self, img: np.memmap) -> tuple[np.ndarray, dict]:
+        return img, {
+            MetaKeys.AFFINE: np.eye(4),
+            MetaKeys.ORIGINAL_AFFINE: np.eye(4),
+            MetaKeys.SPATIAL_SHAPE: img.shape[1:],
             MetaKeys.ORIGINAL_CHANNEL_DIM: 0,
         }

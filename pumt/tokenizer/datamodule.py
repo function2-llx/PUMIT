@@ -8,14 +8,14 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
 
+from luolib import transforms as lt
 from luolib.types import tuple2_t
 from luolib.utils import DataKey
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
-from pumt.conv import SpatialTensor
 from pumt.reader import PUMTReader
-from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, ensure_rgb
+from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD, ensure_rgb
 
 DATA_ROOT = Path('PUMT-normalized')
 
@@ -154,7 +154,10 @@ class TokenizerDataModule(LightningDataModule):
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
             dataset_weight = dataset_weights.get(dataset_name, 1.)
-            meta = pd.read_csv(dataset_dir / 'images-meta.csv', dtype={'key': 'string'})
+            if not (meta_path := dataset_dir / 'images-meta.csv').exists():
+                print(f'skip {dataset_name}')
+                continue
+            meta = pd.read_csv(meta_path, dtype={'key': 'string'})
             meta['weight'] *= dataset_weight
             meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npz')
             for modality in meta['modality'].unique():
@@ -169,8 +172,8 @@ class TokenizerDataModule(LightningDataModule):
         trans_conf = self.trans_conf
         return mt.Compose(
             [
-                mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                # mt.ToTensorD(DataKey.IMG, device='cuda'),
+                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader(2 * trans_conf.train_tz * trans_conf.stride), image_only=True),
+                UpdateSpacingD(),
                 RandAffineCropD(trans_conf.rotate_p),
                 *[
                     mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
@@ -220,7 +223,7 @@ class TokenizerDataModule(LightningDataModule):
         trans_conf = self.trans_conf
         return mt.Compose(
             [
-                mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader, image_only=True),
                 CenterScaleCropD(
                     trans_conf.val_tz,
                     trans_conf.val_tx,

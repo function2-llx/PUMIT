@@ -1,14 +1,21 @@
-import einops
-import math
 from collections.abc import Hashable, Mapping
 
+import einops
+import math
 import numpy as np
 import torch
 
 from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
-from pumt.conv import SpatialTensor
+
+class UpdateSpacingD(mt.Transform):
+    def __call__(self, data: Mapping[Hashable, ...]):
+        data = dict(data)
+        img: MetaTensor = data[DataKey.IMG]
+        spacing = [data[f'space-{i}'] for i in range(3)]
+        img.affine = np.diag([*spacing, 1])
+        return data
 
 class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
     def __init__(self, rotate_p: float, lazy: bool = False):

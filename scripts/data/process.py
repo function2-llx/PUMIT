@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import itertools as it
 from abc import abstractmethod, ABC
 from collections.abc import Callable, Sequence
@@ -18,7 +19,7 @@ from monai.data import MetaTensor, PydicomReader
 from monai.utils import MetaKeys
 
 DATASETS_ROOT = Path('datasets')
-PROCESSED_ROOT = Path('datasets-PUMT')
+PROCESSED_ROOT = Path('processed-data')
 PROCESSED_ROOT.mkdir(exist_ok=True, parents=True)
 
 @dataclass
@@ -31,7 +32,7 @@ class ImageFile:
 
 class DatasetProcessor(ABC):
     name: str
-    max_workers: int = 4
+    max_workers: int = 8
     chunksize: int = 1
 
     @property
@@ -39,8 +40,12 @@ class DatasetProcessor(ABC):
         return DATASETS_ROOT / self.name
 
     @property
+    def output_name(self) -> str:
+        return self.name
+
+    @property
     def output_root(self):
-        return PROCESSED_ROOT / self.name
+        return PROCESSED_ROOT / self.output_name
 
     @abstractmethod
     def get_image_files(self) -> Sequence[ImageFile]:
@@ -97,16 +102,15 @@ class DatasetProcessor(ABC):
             loader = file.loader
         try:
             data = loader(file.path)
+            if cropper is None:
+                cropper = self.get_cropper()
+            ret = self.process_file_data(file, data, cropper)
+            for x in ret:
+                x['origin'] = file.path
+            return ret
         except Exception:
             print(file.path)
             return [{'key': file.key, 'origin': file.path}]
-
-        if cropper is None:
-            cropper = self.get_cropper()
-        ret = self.process_file_data(file, data, cropper)
-        for x in ret:
-            x['origin'] = file.path
-        return ret
 
     def process_file_data(self, file: ImageFile, data: MetaTensor, cropper: Callable[[MetaTensor], MetaTensor]) -> list[dict]:
         if isinstance(file.modality, str):
@@ -129,6 +133,7 @@ class DatasetProcessor(ABC):
                 img = orientation(img)
                 diff[i] = abs(img.pixdim[1] - img.pixdim[2])
             code = codes[diff.argmin()]
+            # TODO: change the original shape accordingly
             return mt.Orientation(code)(img)
         else:
             return img
@@ -139,10 +144,9 @@ class DatasetProcessor(ABC):
         if (r := 512 / min(cropped.shape[2:])) < 1:
             resizer = mt.Resize((-1, round(cropped.shape[2] * r), round(cropped.shape[3] * r)), anti_aliasing=True)
             cropped = resizer(cropped)
-        save_path = self.output_root / 'data' / f'{key}.npz'
-        np.savez(save_path, array=cropped.cpu().numpy(), affine=cropped.affine)
-        cropped_f = cropped.float()
-        return {
+        cropped = cropped.float()
+        spacing = cropped.pixdim
+        info = {
             'key': key,
             'modality': modality,
             **{
@@ -151,21 +155,28 @@ class DatasetProcessor(ABC):
             },
             **{
                 f'space-{i}': s.item()
-                for i, s in enumerate(cropped.pixdim)
+                for i, s in enumerate(spacing)
             },
             **{
                 f'shape-origin-{i}': s
                 for i, s in enumerate(img.meta[MetaKeys.SPATIAL_SHAPE])
             },
-            'mean': cropped_f.mean().item(),
-            'median': cropped_f.median().item(),
-            'std': cropped_f.std().item(),
-            'min': cropped_f.min().item(),
-            'p0.5': mt.percentile(cropped_f, 0.5).item(),
-            'max': cropped_f.max().item(),
-            'p99.5': mt.percentile(cropped_f, 99.5).item(),
+            'mean': cropped.mean().item(),
+            'median': cropped.median().item(),
+            'std': cropped.std().item(),
+            'min': (min_v := cropped.min().item()),
+            'p0.5': mt.percentile(cropped[cropped > min_v], 0.5).item(),
+            'max': cropped.max().item(),
+            'p99.5': mt.percentile(cropped[cropped > min_v], 99.5).item(),
             'weight': weight,
         }
+        if modality.startswith('RGB') or modality.startswith('gray'):
+            scaler = mt.ScaleIntensityRange(0, 255, 0., 1., clip=True)
+        else:
+            scaler = mt.ScaleIntensityRange(info['p0.5'], info['p99.5'], 0., 1., clip=True)
+        scaled = scaler(cropped)
+        np.save(self.output_root / 'data' / f'{key}.npy', scaled.cpu().numpy().astype(np.float16))
+        return info
 
 class Default3DLoaderMixin:
     reader = None
@@ -185,7 +196,7 @@ class NaturalImageLoaderMixin:
 
     def __init__(self):
         self.resize = tvt.Resize(self.max_smaller_size, antialias=True)
-        self.crop = mt.CropForeground()
+        self.crop = mt.CropForeground(allow_smaller=False)
 
     def check_and_adapt_to_3d(self, img: MetaTensor):
         if img.shape[0] == 4:
@@ -229,7 +240,7 @@ class ValueBasedCropper(ABC):
                     v = v[..., None]
             return (img > v).all(dim=0, keepdim=True)
 
-        return mt.CropForeground(select_fn)
+        return mt.CropForeground(select_fn, allow_smaller=False)
 
 class PercentileCropperMixin(ValueBasedCropper):
     min_p: float = 0.5
@@ -321,8 +332,8 @@ class BraTS2023SegmentationProcessor(Default3DLoaderMixin, PercentileCropperMixi
     orientation = 'SAR'
 
     @property
-    def output_root(self):
-        return PROCESSED_ROOT / f"BraTS2023-{self.name.split('-')[-1]}"
+    def output_name(self):
+        return f"BraTS2023-{self.name.split('-')[-1]}"
 
     def get_image_files(self) -> Sequence[ImageFile]:
         modality_map = {
@@ -354,6 +365,10 @@ class BraTS2023SSAProcessor(BraTS2023SegmentationProcessor):
     name = 'BraTS2023/BraTS-SSA'
 
 class BCVProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
+    @property
+    def output_name(self):
+        return self.name.replace('/', '-')
+
     def get_image_files(self) -> Sequence[ImageFile]:
         import re
         pattern = re.compile(r'\d+')
@@ -405,6 +420,8 @@ class ChákṣuProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetP
 class CheXpertProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'CheXpert'
     assert_gray_scale: bool = True
+    max_workers = 16
+    chunksize = 10
 
     @property
     def dataset_root(self):
@@ -497,7 +514,7 @@ class EPISURGProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProc
 
 class FLARE22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'FLARE22'
-    max_workers = 6
+    max_workers = 4
 
     def get_image_files(self):
         image_folders = [
@@ -513,6 +530,7 @@ class FLARE22Processor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProc
 
 class HaNSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'HaN-Seg'
+    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         modality_map = {
@@ -544,8 +562,6 @@ class HNSCCProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor
 
     def get_image_files(self) -> Sequence[ImageFile]:
         meta = self.tcia_meta
-        # meta = pd.read_csv(self.dataset_root / 'metadata.csv')
-        # meta = meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
         ret = []
         # these are strange series
         ignore_sids = {
@@ -589,7 +605,9 @@ class HC18Processor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProces
         ]
 
 class IChallengeProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor, ABC):
-    pass
+    @property
+    def output_name(self):
+        return self.name.replace('/', '-')
 
 class IChallengeADAMProcessor(IChallengeProcessor):
     name = 'iChallenge/ADAM'
@@ -659,13 +677,13 @@ class IDRiDProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProce
     def get_image_files(self) -> Sequence[ImageFile]:
         ret = []
         file_sha3s = set()
-        for task in ['A. Segmentation', 'B. Disease Grading']:
-            for path in (self.dataset_root / task / '1. Original Images').glob('*/*.jpg'):
+        for task, split in it.product(['A. Segmentation', 'B. Disease Grading'], ['a. Training', 'b. Testing']):
+            for path in (self.dataset_root / task / '1. Original Images' / f'{split} Set').glob('*.jpg'):
                 h = file_sha3(path)
                 if h in file_sha3s:
                     continue
                 file_sha3s.add(h)
-                key = f'{task[0]}.{path.stem}'
+                key = f'{task[0]}.{split[0]}.{path.stem}'
                 ret.append(ImageFile(key, 'RGB/fundus', path))
         return ret
 
@@ -737,8 +755,8 @@ class MRSpineSegProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetP
 
 class MSDProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     @property
-    def output_root(self):
-        return PROCESSED_ROOT / self.name.replace('/', '-')
+    def output_name(self):
+        return self.name.replace('/', '-')
 
     def get_modality(self) -> list[str]:
         import json
@@ -819,6 +837,7 @@ class NCTCTProcessor(Default3DLoaderMixin, PercentileCropperMixin, TCIAProcessor
 class NIHChestXRayProcessor(NaturalImageLoaderMixin, ConstantCropperMixin, DatasetProcessor):
     name = 'NIHChestX-ray'
     assert_gray_scale = True
+    max_workers = 16
     chunksize = 10
 
     @property
@@ -976,7 +995,7 @@ class TotalSegmentatorProcessor(Default3DLoaderMixin, PercentileCropperMixin, Da
 
 class VerSeProcessor(Default3DLoaderMixin, PercentileCropperMixin, DatasetProcessor):
     name = 'VerSe'
-    max_workers = 1
+    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         suffix = '.nii.gz'
@@ -1012,9 +1031,21 @@ def main():
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('datasets', nargs='*', type=str)
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--exclude', nargs='*', type=str)
     parser.add_argument('--ie', action='store_true')
     args = parser.parse_args()
-    for dataset in args.datasets:
+    if args.all:
+        exclude = set(args.exclude)
+        datasets = [
+            name for cls in globals().values()
+            if inspect.isclass(cls) and issubclass(cls, DatasetProcessor) and hasattr(cls, 'name')
+            and (name := cls.__name__[:-len('Processor')]) not in exclude
+        ]
+        print(datasets)
+    else:
+        datasets = args.datasets
+    for dataset in datasets:
         processor_cls: type[DatasetProcessor] | None = globals().get(f'{dataset}Processor', None)
         if processor_cls is None:
             print(f'no processor for {dataset}')
