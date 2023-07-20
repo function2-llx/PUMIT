@@ -12,6 +12,7 @@ dependencies:
 - pytorch::pytorch-cuda=11.8
 - pytorch::torchvision
 - einops
+- lightning
 - pydantic<2  # https://github.com/Lightning-AI/lightning/issues/18027
 - torchmetrics
 - transformers
@@ -25,10 +26,10 @@ dependencies:
 - itk
 - pydicom
 - gdcm
+- expect  # for unbuffer
 
 - pip
 - pip:
   - cytoolz
   - pynrrd
-  - lightning==2.0.5  # conda-forge build fails
   - jsonargparse[signatures]  # for lightning CLI

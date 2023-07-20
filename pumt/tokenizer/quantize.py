@@ -54,8 +54,8 @@ class VectorQuantizer(nn.Module):
         if (weight := state_dict.pop(f'{prefix}embed.weight', None)) is not None:
             # load pre-trained Gumbel VQGAN
             state_dict[f'{prefix}embedding.weight'] = weight
-        if (weight := state_dict.pop(proj_weight_key := f'{prefix}proj.weight', None)) is not None:
-            # convert 1x1 conv2d weight to linear
+        if (weight := state_dict.get(proj_weight_key := f'{prefix}proj.weight')) is not None:
+            # convert 1x1 conv2d weight (from VQGAN with Gumbel softmax) to linear
             if weight.ndim == 4 and weight.shape[2:] == (1, 1):
                 state_dict[proj_weight_key] = weight.squeeze()
         elif self.mode != 'nearest':
