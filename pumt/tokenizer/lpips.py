@@ -29,6 +29,9 @@ class InputNormLayer(nn.Module):
     def forward(self, x: torch.Tensor):
         return (x - self.mean) / self.std
 
+def normalize_tensor_(x: torch.Tensor, eps: float = 1e-10):
+    return x.div_(x.norm(dim=1, keepdim=True) + eps)
+
 class LPIPS(nn.Module):
     # Learned perceptual metric
     def __init__(self):
@@ -60,9 +63,10 @@ class LPIPS(nn.Module):
         for feature, aggregate_layer in zip(self.features, self.aggregate_layers):
             x = feature(x)
             y = feature(y)
-            diff = (x / x.norm(dim=1, keepdim=True) - y / y.norm(dim=1, keepdim=True)) ** 2
+            diff = 1 - einops.einsum(normalize_tensor_(x), normalize_tensor_(y), 'n c ..., n c ... -> n ...')
+            aggregated = aggregate_layer(diff).mean()
             if ret is None:
-                ret = aggregate_layer(diff).mean()
+                ret = aggregated
             else:
-                ret += aggregate_layer(diff).mean()
-        return ret
+                ret += aggregated
+        return 2 * ret

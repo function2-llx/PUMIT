@@ -54,6 +54,7 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         self,
         data: list[dict],
         num_batches: int,
+        num_skip_batches: int,
         trans_conf: TransformConf,
         num_replicas: int,
         rank: int,
@@ -65,6 +66,7 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         super().__init__(data)
         self.data = data
         self.num_batches = num_batches
+        self.num_skip_batches = num_skip_batches
         self.trans_conf = trans_conf
         self.num_replicas = num_replicas
         self.rank = rank
@@ -77,10 +79,11 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         return self.num_batches
 
     def __iter__(self):
-        remain_batches = self.num_batches * self.num_replicas
+        remain_batches = self.num_batches
         trans_conf = self.trans_conf
         bucket = {}
         next_rank = 0
+        num_skipped_batches = 0
         while remain_batches > 0:
             for i in self.weight.multinomial(self.buffer_size).tolist():
                 data = self.data[i]
@@ -106,10 +109,10 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 else:
                     scale_z = 1.
                 # ratio of spacing z / spacing x
-                rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx)
+                rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx << 1)
                 aniso_d = int(rz).bit_length() - 1
-                dz = dx >> aniso_d
-                tz = 1 if shape[0] == 1 else trans_conf.train_tz
+                dz = max(dx >> aniso_d, 1)
+                tz = 1 if (1 << aniso_d > dx) else trans_conf.train_tz
                 trans_info = {
                     'aniso_d': aniso_d,
                     'scale': (scale_z, scale_x, scale_x),
@@ -118,12 +121,15 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 bucket.setdefault(aniso_d, []).append((i, trans_info))
                 if len(batch := bucket[aniso_d]) == self.batch_size:
                     if next_rank == self.rank:
-                        yield batch
+                        if num_skipped_batches >= self.num_skip_batches:
+                            yield batch
+                        else:
+                            num_skipped_batches += 1
+                        remain_batches -= 1
+                        if remain_batches == 0:
+                            break
                     next_rank = (next_rank + 1) % self.num_replicas
-                    remain_batches -= 1
                     bucket.pop(aniso_d)
-                    if remain_batches == 0:
-                        break
 
 class TokenizerDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
@@ -178,6 +184,7 @@ class TokenizerDataModule(LightningDataModule):
         self.trans_conf = trans_conf
 
     def train_transform(self) -> Callable:
+        # TODO: also enable skipping the transform deterministically?
         trans_conf = self.trans_conf
         return mt.Compose(
             [
@@ -207,8 +214,7 @@ class TokenizerDataModule(LightningDataModule):
         assert (np.array(aniso_d_list) == aniso_d).all()
         return torch.stack(tensor_list), aniso_d
 
-    def train_dataloader(self, world_size: int = 1, rank: int = 0):
-        # TODO: skip batches when resume training
+    def train_dataloader(self, world_size: int = 1, rank: int = 0, num_skip_batches: int = 0):
         conf = self.dl_conf
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
@@ -216,11 +222,8 @@ class TokenizerDataModule(LightningDataModule):
             TokenizerDataset(data, self.train_transform()),
             conf.num_workers,
             batch_sampler=DistributedTokenizerBatchSampler(
-                data, conf.num_train_batches,
-                self.trans_conf,
-                world_size, rank,
-                self.R,
-                conf.train_batch_size, weight,
+                data, conf.num_train_batches, num_skip_batches, self.trans_conf,
+                world_size, rank, self.R, conf.train_batch_size, weight,
             ),
             prefetch_factor=8 if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,

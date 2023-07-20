@@ -47,6 +47,7 @@ class TrainingArguments:
     max_norm_d: int | float | None = None
     ckpt_path: Path
     output_dir: Path = Path('output/tokenizer')
+    num_skip_steps: int = 0
 
 def build_optimizer(model: nn.Module, optimizer_conf: dict):
     decay_keys, no_decay_keys = split_weight_decay_keys(model)
@@ -162,14 +163,18 @@ def main():
     vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
+    num_skip_steps = training_args.num_skip_steps
     train_loader, val_loader = fabric.setup_dataloaders(
-        datamodule.train_dataloader(fabric.world_size, fabric.global_rank),
+        datamodule.train_dataloader(fabric.world_size, fabric.global_rank, num_skip_steps),
         datamodule.val_dataloader(),
         use_distributed_sampler=False,
     )
 
     metric_dict = MetricDict()
-    for step, (x, aniso_d) in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
+    for step, (x, aniso_d) in enumerate(
+        tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=num_skip_steps),
+        start=num_skip_steps,
+    ):
         x = 2 * x - 1
         x = SpatialTensor(x, aniso_d)
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)

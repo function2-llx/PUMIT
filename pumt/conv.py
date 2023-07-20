@@ -29,8 +29,12 @@ class SpatialTensor(torch.Tensor):
         return f'shape={self.shape}, aniso_d={aniso_d}, num_downsamples={num_downsamples}\n{super().__repr__()}'
 
     @property
+    def is_aniso(self):
+        return self.aniso_d > self.num_downsamples
+
+    @property
     def downsample_ready(self) -> bool:
-        return self.aniso_d <= self.num_downsamples
+        return not self.is_aniso
 
     @property
     def upsample_ready(self) -> bool:
@@ -96,7 +100,7 @@ class InflatableConv3d(nn.Conv3d):
     def forward(self, x: SpatialTensor):
         stride = list(self.stride)
         padding = list(self.padding)
-        if x.aniso_d > x.num_downsamples:
+        if x.is_aniso:
             stride[0] = 1
             padding[0] = 0
             weight = self.weight.sum(dim=2, keepdim=True)
