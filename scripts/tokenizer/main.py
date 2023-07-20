@@ -170,7 +170,6 @@ def main():
 
     metric_dict = MetricDict()
     for step, (x, aniso_d) in enumerate(tqdm(train_loader, ncols=80, desc='training', disable=fabric.local_rank != 0)):
-        continue
         x = 2 * x - 1
         x = SpatialTensor(x, aniso_d)
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
