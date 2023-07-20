@@ -214,6 +214,8 @@ def main():
         optimizer_d.zero_grad()
         disc_loss = fabric.all_reduce(disc_loss)
         disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss.item() * (1 - training_args.disc_loss_momentum)
+        # fabric.all_reduce will modify value inplace with sum
+        log_dict['disc_loss'] = disc_loss
         log_dict['disc_loss_ema'] = disc_loss_ema
         metric_dict.update_metrics(log_dict)
         optimized_steps = step + 1
