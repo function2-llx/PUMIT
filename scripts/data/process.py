@@ -1047,7 +1047,7 @@ def main():
     parser.add_argument('--ie', action='store_true')
     args = parser.parse_args()
     if args.all:
-        exclude = set(args.exclude + ['MSDBrainTumour'])
+        exclude = set(args.exclude + [MSDBrainTumourProcessor.__name__[:-len('Processor')]])
         datasets = [
             name for cls in globals().values()
             if inspect.isclass(cls) and issubclass(cls, DatasetProcessor) and hasattr(cls, 'name')

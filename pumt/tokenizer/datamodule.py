@@ -68,9 +68,9 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
         self.trans_conf = trans_conf
         self.num_replicas = num_replicas
         self.rank = rank
+        self.R = random_state
         self.batch_size = batch_size
         self.weight = weight
-        self.R = random_state
         self.buffer_size = buffer_size
 
     def __len__(self):
@@ -95,9 +95,8 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                 tx = trans_conf.train_tx
                 size_x = tx * dx
                 if self.R.uniform() < trans_conf.scale_x_p:
-                    # FIXME: the lower bound is inappropriate
                     scale_x = self.R.uniform(
-                        trans_conf.train_scale_x[0] * origin_size_x / size_x,
+                        trans_conf.train_scale_x[0],
                         min(origin_size_x / size_x, trans_conf.train_scale_x[1]),
                     )
                 else:
@@ -189,17 +188,14 @@ class TokenizerDataModule(LightningDataModule):
                     mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
                     for i in range(3)
                 ],
-                # mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
-                # mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
-                # lt.ClampIntensityD(DataKey.IMG),
-                # lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
-                # mt.OneOf([
-                #     lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
-                #     lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
-                # ]),
-                # mt.LambdaD(DataKey.IMG, MetaTensor.as_tensor, track_meta=False),
-                # operator.itemgetter(DataKey.IMG),
-                # ensure_rgb,
+                mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
+                mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
+                lt.ClampIntensityD(DataKey.IMG),
+                lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
+                mt.OneOf([
+                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
+                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
+                ]),
                 AsSpatialTensorD(),
             ],
             lazy=True,
