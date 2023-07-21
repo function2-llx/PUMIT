@@ -1,0 +1,12 @@
+z_channels: 256
+embedding_dim: 256
+ed_kwargs:
+  in_channels: 3
+  z_channels: 256
+  layer_channels: [128, 128, 256, 512]
+  num_res_blocks: 2
+  additional_interpolation: true
+vq_kwargs:
+  num_embeddings: 8192
+  embedding_dim: 256
+  mode: soft
