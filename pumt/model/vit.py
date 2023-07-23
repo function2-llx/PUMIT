@@ -13,15 +13,25 @@ class PatchEmbed(nn.Module):
         self.proj = InflatableConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x: torch.Tensor):
-        # x = self.proj(x).flatten(2).transpose(1, 2)
         return einops.rearrange(self.proj(x), 'n c ... -> n (...) c')
 
 class Block(nn.Module):
-
     def __init__(
-        self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-        drop_path=0., init_values=None, act_layer=nn.GELU, norm_layer=nn.LayerNorm,
-        window_size=None, attn_head_dim=None, use_decoupled_rel_pos_bias=False,
+        self,
+        dim,
+        num_heads,
+        mlp_ratio=4.,
+        qkv_bias=False,
+        qk_scale=None,
+        drop=0.,
+        attn_drop=0.,
+        drop_path=0.,
+        init_values=None,
+        act_layer=nn.GELU,
+        norm_layer=nn.LayerNorm,
+        window_size=None,
+        attn_head_dim=None,
+        use_decoupled_rel_pos_bias=False,
         depth=None,
         postnorm=False,
         deepnorm=False,
@@ -126,6 +136,7 @@ class VisionTransformerForMaskedImageModeling(nn.Module):
         depth: int = 12,
         num_heads: int = 12,
         mlp_ratio: float = 4.,
+
         qkv_bias: bool = True,
         qk_scale=None,
         drop_rate=0.,
