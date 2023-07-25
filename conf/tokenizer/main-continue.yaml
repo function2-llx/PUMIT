@@ -45,8 +45,12 @@ data:
     Kaggle-RDC: 0.1
     CheXpert: 0.007
     NIHChestX-ray: 0.007
-    RSNA-2020-PED: 0.3
+    IXI: 0.5
     RSNA-2022-CSFD: 0.6
+    BraTS2023-MEN: 0.5
+    BraTS2023-GLI: 0.4
+    RSNA-2020-PED: 0.3
+    PI-CAI: 0.25
   dl_conf:
     train_batch_size: 8
   trans_conf:
