@@ -122,7 +122,6 @@ class InflatableInputConv3d(InflatableConv3d):
             )
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-# RGB to grayscale ref: https://www.itu.int/rec/R-REC-BT.601
 class InflatableOutputConv3d(InflatableConv3d):
     def __init__(self, *args, force: bool = False, c_inflation: Literal['RGB_L', 'average'] = 'RGB_L', **kwargs):
         super().__init__(*args, **kwargs)
@@ -141,6 +140,7 @@ class InflatableOutputConv3d(InflatableConv3d):
                     )
                 case 'RGB_L':
                     assert weight.shape[0] == 3 and self.out_channels == 1
+                    # RGB to grayscale ref: https://www.itu.int/rec/R-REC-BT.601
                     weight = einops.einsum(
                         weight.new_tensor([0.299, 0.587, 0.114]), weight,
                         'c, c ... -> ...'

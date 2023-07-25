@@ -46,6 +46,7 @@ class VectorQuantizer(nn.Module):
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
 
     def adjust_temperature(self, global_step: int, max_steps: int):
+        # FIXME: why hard gumbel?
         if self.mode == 'gumbel' and self.hard_gumbel:
             t_min, t_max = 1e-6, 1.
             self.temperature = t_min + 0.5 * (t_max - t_min) * (1 + np.cos(min(global_step / max_steps, 1.) * np.pi))

@@ -1,0 +1,52 @@
+vqvae: vqvae.yaml
+optimizer_g:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 5e-2
+lr_scheduler_g:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_in_epochs: false
+      lr_min: 1e-6
+      warmup_t: 5000
+      warmup_prefix: true
+  interval: step
+  frequency: 100
+loss:
+  quant_weight: 1e-7
+  gan_weight: 1
+  max_perceptual_slices: 24
+optimizer_d:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 5e-2
+lr_scheduler_d:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_in_epochs: false
+      lr_min: 1e-6
+      warmup_t: 5000
+      warmup_prefix: true
+  interval: step
+  frequency: 100
+data:
+  dataset_weights:
+    CheXpert: 0.03
+    NIHChestX-ray: 0.03
+    RSNA-2020-PED: 0.2
+    RSNA-2022-CSFD: 0.5
+  dl_conf:
+    train_batch_size: 8
+  trans_conf:
+    train_tz: 3
+    train_tx: 8
+    train_scale_x: [0.75, 2.0]
+training:
+  max_steps: 300000
+  pretrained_ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
+  disc_loss_momentum: 0.85
+  use_gan_th: 0.15

@@ -45,9 +45,11 @@ class TrainingArguments:
     save_every_n_steps: int = 10000
     max_norm_g: int | float | None = None
     max_norm_d: int | float | None = None
-    resume_ckpt: Path | None = None
-    pretrained_ckpt_path: Path
+    resume_ckpt_path: Path | None = None
+    reset_optimized_steps: bool = False
+    pretrained_ckpt_path: Path | None = None
     output_dir: Path = Path('output/tokenizer')
+    disc_loss_ema_init: float = 10.
     disc_loss_momentum: float = 0.85
     use_gan_th: float = 0.15
 
@@ -139,18 +141,20 @@ def main():
     save_dir = fabric.broadcast(save_dir)
     img_save_dir = save_dir / 'images'
     ckpt_save_dir = save_dir / 'checkpoints'
+    conf_save_dir = save_dir / 'conf'
     if fabric.is_global_zero:
-        ckpt_save_dir.mkdir(parents=True)
-        parser.save(raw_args, save_dir / 'conf.yaml')
+        save_dir.mkdir(parents=True)
+        ckpt_save_dir.mkdir()
+        conf_save_dir.mkdir()
+        parser.save(raw_args, conf_save_dir / 'main.yaml')
+
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = True
     vqvae: VQVAEModel = args.vqvae
     optimizer_g: Optimizer = build_optimizer(vqvae, args.optimizer_g)
-    lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
     vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
     loss_module: VQGANLoss = args.loss
     optimizer_d: Optimizer = build_optimizer(loss_module.discriminator, args.optimizer_d)
-    lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
     optimized_steps = 0
@@ -161,7 +165,7 @@ def main():
         'optimizer_d': optimizer_d,
         'step': 0,
     }
-    if training_args.resume_ckpt is None:
+    if training_args.resume_ckpt_path is None:
         ckpt = torch.load(training_args.pretrained_ckpt_path, map_location='cpu')
         print(f'[rank {fabric.global_rank}] load discriminator')
         load_ckpt(loss_module, ckpt, key_prefix='loss.')
@@ -172,9 +176,13 @@ def main():
         print(f'[rank {fabric.global_rank}] load vqvae')
         load_ckpt(vqvae, ckpt)
     else:
-        fabric.load(training_args.resume_ckpt, state)
-        optimized_steps = state['step']
-
+        fabric.load(training_args.resume_ckpt_path, state)
+        print(f'resumed from {training_args.resume_ckpt_path}')
+        if not training_args.reset_optimized_steps:
+            optimized_steps = state['step']
+    # create lr scheduler after checkpoint loading, or optimizer.param_groups[i] will be different object
+    lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
+    lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
     datamodule: TokenizerDataModule = args.data
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(fabric.world_size, fabric.global_rank, optimized_steps),
@@ -183,8 +191,8 @@ def main():
     )
 
     metric_dict = MetricDict()
-    disc_loss_ema = 1.
-    for step, (x, aniso_d) in enumerate(
+    disc_loss_ema = training_args.disc_loss_ema_init
+    for step, (x, aniso_d, paths) in enumerate(
         tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=optimized_steps),
         start=optimized_steps,
     ):
@@ -193,7 +201,9 @@ def main():
         vqvae.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, quant_out = vqvae(x)
         loss_module.discriminator.requires_grad_(False)
-        loss, log_dict = loss_module.forward_gen(x, x_rec, quant_out.loss, disc_loss_ema <= training_args.use_gan_th, vqvae.decoder.conv_out.weight, fabric)
+        loss, log_dict = loss_module.forward_gen(
+            x, x_rec, quant_out.loss, disc_loss_ema <= training_args.use_gan_th, vqvae.decoder.conv_out.weight, fabric
+        )
         fabric.backward(loss)
         if training_args.max_norm_g is not None:
             fabric.clip_gradients(vqvae, optimizer_g, max_norm=training_args.max_norm_g)
@@ -224,6 +234,7 @@ def main():
         if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
             step_save_dir = img_save_dir / f'step-{optimized_steps}'
             step_save_dir.mkdir(parents=True)
+            (step_save_dir / 'path.txt').write_text(str(paths[0]))
             for i in range(x.shape[2]):
                 save_image((x[0, :, i] + 1) / 2, step_save_dir / f'{i}-origin.png')
                 save_image((x_rec[0, :, i] + 1) / 2, step_save_dir / f'{i}-rec.png')

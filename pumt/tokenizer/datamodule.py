@@ -11,6 +11,7 @@ from torch.utils.data import Dataset as TorchDataset, Sampler
 from luolib import transforms as lt
 from luolib.types import tuple2_t
 from luolib.utils import DataKey
+from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
@@ -209,10 +210,10 @@ class TokenizerDataModule(LightningDataModule):
         )
 
     @staticmethod
-    def collate_fn(batch: list[dict]):
-        tensor_list, [aniso_d, *aniso_d_list] = zip(*batch)
+    def collate_fn(batch: list[tuple[torch.Tensor, int, PathLike]]):
+        tensor_list, [aniso_d, *aniso_d_list], paths = zip(*batch)
         assert (np.array(aniso_d_list) == aniso_d).all()
-        return torch.stack(tensor_list), aniso_d
+        return torch.stack(tensor_list), aniso_d, paths
 
     def train_dataloader(self, world_size: int = 1, rank: int = 0, num_skip_batches: int = 0):
         conf = self.dl_conf

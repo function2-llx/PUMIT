@@ -1,20 +1,8 @@
-vqvae:
-  z_channels: 256
-  embedding_dim: 256
-  ed_kwargs:
-    in_channels: 3
-    z_channels: 256
-    layer_channels: [128, 128, 256, 512]
-    num_res_blocks: 2
-    additional_interpolation: true
-  vq_kwargs:
-    num_embeddings: 8192
-    embedding_dim: 256
-    mode: soft
+vqvae: vqvae.yaml
 optimizer_g:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 1e-4
+    lr: 1e-5
     weight_decay: 5e-2
 lr_scheduler_g:
   scheduler:
@@ -22,13 +10,11 @@ lr_scheduler_g:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 5000
-      warmup_prefix: true
   interval: step
   frequency: 100
 loss:
   quant_weight: 1e-7
-  gan_weight: 1
+  gan_weight: 20
   max_perceptual_slices: 24
 optimizer_d:
   class_path: torch.optim.AdamW
@@ -41,16 +27,22 @@ lr_scheduler_d:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 5000
-      warmup_prefix: true
   interval: step
   frequency: 100
 data:
   dataset_weights:
-    CheXpert: 0.03
-    NIHChestX-ray: 0.03
-    RSNA-2020-PED: 0.2
-    RSNA-2022-CSFD: 0.5
+    IDRiD: 0.5
+    BUSI: 0.4
+    iChallenge-ADAM: 0.2
+    iChallenge-PALM: 0.2
+    HC18: 0.2
+    Chákṣu: 0.2
+    iChallenge-REFUGE2: 0.1
+    Kaggle-RDC: 0.1
+    CheXpert: 0.007
+    NIHChestX-ray: 0.007
+    RSNA-2020-PED: 0.3
+    RSNA-2022-CSFD: 0.6
   dl_conf:
     train_batch_size: 8
   trans_conf:
@@ -58,5 +50,9 @@ data:
     train_tx: 8
     train_scale_x: [0.75, 2.0]
 training:
-  max_steps: 300000
-  pretrained_ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
+  seed: 233
+  max_steps: 200000
+  resume_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt
+  reset_optimized_steps: true
+  disc_loss_momentum: 0.6
+  use_gan_th: 0.05
