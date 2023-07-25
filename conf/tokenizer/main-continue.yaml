@@ -16,7 +16,7 @@ lr_scheduler_g:
   frequency: 100
 loss:
   quant_weight: 1e-7
-  gan_weight: 20
+  gan_weight: 10
   max_perceptual_slices: 24
 optimizer_d:
   class_path: torch.optim.AdamW
@@ -61,5 +61,5 @@ training:
   seed: 233
   max_steps: 200000
   pretrained_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt
-  disc_loss_momentum: 0.6
+  disc_loss_momentum: 0.9
   use_gan_th: 0.05

@@ -6,6 +6,7 @@ from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as LightningFabric
 from lightning.pytorch.cli import instantiate_class
 from lightning.pytorch.loggers import WandbLogger
+import math
 import torch
 from torch import nn
 from torch.optim import Optimizer
@@ -196,6 +197,7 @@ def main():
 
     metric_dict = MetricDict()
     disc_loss_ema = training_args.disc_loss_ema_init
+    disc_loss_item = math.inf
     for step, (x, aniso_d, paths) in enumerate(
         tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=optimized_steps),
         start=optimized_steps,
@@ -206,7 +208,7 @@ def main():
         x_rec, quant_out = vqvae(x)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
-            x, x_rec, quant_out.loss, disc_loss_ema <= training_args.use_gan_th, vqvae.decoder.conv_out.weight, fabric
+            x, x_rec, quant_out.loss, max(disc_loss_ema, disc_loss_item) <= training_args.use_gan_th, vqvae.decoder.conv_out.weight, fabric
         )
         fabric.backward(loss)
         if training_args.max_norm_g is not None:
@@ -227,7 +229,7 @@ def main():
         optimizer_d.step()
         optimizer_d.zero_grad()
         disc_loss = fabric.all_reduce(disc_loss)
-        disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss.item() * (1 - training_args.disc_loss_momentum)
+        disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + (disc_loss_item := disc_loss.item()) * (1 - training_args.disc_loss_momentum)
         # fabric.all_reduce will modify value inplace with sum
         log_dict['disc_loss'] = disc_loss
         log_dict['disc_loss_ema'] = disc_loss_ema
