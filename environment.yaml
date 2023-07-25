@@ -33,3 +33,4 @@ dependencies:
   - cytoolz
   - pynrrd
   - jsonargparse[signatures]  # for lightning CLI
+  - xformers
