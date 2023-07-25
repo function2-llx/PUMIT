@@ -56,7 +56,6 @@ data:
 training:
   seed: 233
   max_steps: 200000
-  resume_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt
-  reset_optimized_steps: true
+  pretrained_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt
   disc_loss_momentum: 0.6
   use_gan_th: 0.05

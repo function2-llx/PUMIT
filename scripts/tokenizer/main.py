@@ -46,7 +46,6 @@ class TrainingArguments:
     max_norm_g: int | float | None = None
     max_norm_d: int | float | None = None
     resume_ckpt_path: Path | None = None
-    reset_optimized_steps: bool = False
     pretrained_ckpt_path: Path | None = None
     output_dir: Path = Path('output/tokenizer')
     disc_loss_ema_init: float = 10.
@@ -152,11 +151,11 @@ def main():
     torch.backends.cudnn.benchmark = True
     vqvae: VQVAEModel = args.vqvae
     optimizer_g: Optimizer = build_optimizer(vqvae, args.optimizer_g)
-    vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
+    lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
     loss_module: VQGANLoss = args.loss
     optimizer_d: Optimizer = build_optimizer(loss_module.discriminator, args.optimizer_d)
-    loss_module = fabric.to_device(loss_module)
-    loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
+    lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
+
     optimized_steps = 0
     state = {
         'vqvae': vqvae,
@@ -178,11 +177,12 @@ def main():
     else:
         fabric.load(training_args.resume_ckpt_path, state)
         print(f'resumed from {training_args.resume_ckpt_path}')
-        if not training_args.reset_optimized_steps:
-            optimized_steps = state['step']
-    # create lr scheduler after checkpoint loading, or optimizer.param_groups[i] will be different object
-    lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
-    lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
+        optimized_steps = state['step']
+
+    # setup model and optimizer after checkpoint loading, or optimizer.param_groups[i] will be different object
+    vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
+    loss_module = fabric.to_device(loss_module)
+    loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
     datamodule: TokenizerDataModule = args.data
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(fabric.world_size, fabric.global_rank, optimized_steps),
