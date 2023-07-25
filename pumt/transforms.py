@@ -8,6 +8,7 @@ import torch
 from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
+from monai.utils import ImageMetaKey, MetaKeys
 
 class UpdateSpacingD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
@@ -91,4 +92,5 @@ def rgb_to_gray(x: torch.Tensor, batched: bool = False) -> torch.Tensor:
 
 class AsSpatialTensorD(mt.Transform):
     def __call__(self, data: Mapping[Hashable]):
-        return ensure_rgb(data[DataKey.IMG].as_tensor()), data['_trans']['aniso_d']
+        img: MetaTensor = data[DataKey.IMG]
+        return ensure_rgb(img.as_tensor()), data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
