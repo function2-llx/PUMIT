@@ -10,6 +10,8 @@ lr_scheduler_g:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
+      warmup_t: 5000
+      warmup_prefix: true
   interval: step
   frequency: 100
 loss:
@@ -27,6 +29,8 @@ lr_scheduler_d:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
+      warmup_t: 5000
+      warmup_prefix: true
   interval: step
   frequency: 100
 data:
