@@ -49,7 +49,7 @@ class TrainingArguments:
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
     output_dir: Path = Path('output/tokenizer')
-    disc_loss_ema_init: float = 10.
+    disc_loss_ema_init: float = 1.
     disc_loss_momentum: float = 0.85
     use_gan_th: float = 0.15
 
