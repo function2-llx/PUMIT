@@ -79,6 +79,7 @@ def get_parser():
     parser.add_class_arguments(TokenizerDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
     parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
+    parser.link_arguments('training.seed', 'data.seed')
     return parser
 
 class MetricDict(dict):
