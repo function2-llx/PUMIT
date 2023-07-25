@@ -1,5 +1,5 @@
 import abc
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Literal
 
 import einops
@@ -20,7 +20,7 @@ class SpatialTensor(torch.Tensor):
 
     def __init__(self, _x, aniso_d: int, *_args, **_kwargs):
         super().__init__()
-        self.aniso_d = aniso_d
+        self._aniso_d = aniso_d
         self.num_downsamples = 0
 
     def __repr__(self, *args, **kwargs):
@@ -29,16 +29,16 @@ class SpatialTensor(torch.Tensor):
         return f'shape={self.shape}, aniso_d={aniso_d}, num_downsamples={num_downsamples}\n{super().__repr__()}'
 
     @property
-    def is_aniso(self):
-        return self.aniso_d > self.num_downsamples
+    def aniso_d(self):
+        return max(self._aniso_d - self.num_downsamples, 0)
 
     @property
     def downsample_ready(self) -> bool:
-        return not self.is_aniso
+        return self.aniso_d == 0
 
     @property
     def upsample_ready(self) -> bool:
-        return self.aniso_d < self.num_downsamples
+        return self._aniso_d < self.num_downsamples
 
     @classmethod
     def find_meta_ref_iter(cls, iterable: Iterable):
@@ -62,18 +62,31 @@ class SpatialTensor(torch.Tensor):
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         ret = super().__torch_function__(func, types, args, kwargs)
-        if isinstance(ret, SpatialTensor) and (
+        if isinstance(ret, Sequence):
+            unpack = False
+        else:
+            unpack = True
+            ret = [ret]
+        if any(isinstance(x, SpatialTensor) for x in ret) and (
             (meta_ref := cls.find_meta_ref(args)) is not None
             or (meta_ref := cls.find_meta_ref(kwargs)) is not None
         ):
-            ret.aniso_d = meta_ref.aniso_d
-            ret.num_downsamples = meta_ref.num_downsamples
+            meta_ref: SpatialTensor
+            for x in ret:
+                if isinstance(x, SpatialTensor):
+                    x._aniso_d = meta_ref._aniso_d
+                    x.num_downsamples = meta_ref.num_downsamples
+        if unpack:
+            ret = ret[0]
         return ret
+
+    def as_tensor(self):
+        return self.as_subclass(torch.Tensor)
 
 class InflatableConv3d(nn.Conv3d):
     def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
         super().__init__(*args, **kwargs)
-        assert self.stride[0] in (1, 2)
+        assert self.stride[0] & (self.stride[0] - 1) == 0, 'only support power of 2'
         assert self.padding_mode == 'zeros'
         assert d_inflation in ['average', 'center']
         self.inflation = d_inflation
@@ -100,12 +113,21 @@ class InflatableConv3d(nn.Conv3d):
     def forward(self, x: SpatialTensor):
         stride = list(self.stride)
         padding = list(self.padding)
-        if x.is_aniso:
-            stride[0] = 1
-            padding[0] = 0
-            weight = self.weight.sum(dim=2, keepdim=True)
-        else:
+        stride[0] = max(self.stride[0] >> x.aniso_d, 1)
+        if stride[0] == self.stride[0]:
             weight = self.weight
+        else:
+            padding[0] = 0
+            if stride[0] == 1:
+                weight = self.weight.sum(dim=2, keepdim=True)
+            else:
+                assert self.stride[0] == self.kernel_size[0], "don't do this or teach me how to do this /kl"
+                weight = einops.reduce(
+                    self.weight,
+                    'co ci (dr dc) ... -> co ci dr ...',
+                    'sum',
+                    dr=stride[0],
+                )
         return nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
 
 class InflatableInputConv3d(InflatableConv3d):
