@@ -166,14 +166,18 @@ def main():
     }
     if training_args.resume_ckpt_path is None:
         ckpt = torch.load(training_args.pretrained_ckpt_path, map_location='cpu')
-        print(f'[rank {fabric.global_rank}] load discriminator')
-        load_ckpt(loss_module, ckpt, key_prefix='loss.')
-        ckpt['state_dict'] = {
-            k: v
-            for k, v in ckpt['state_dict'].items() if not k.startswith('loss.')
-        }
-        print(f'[rank {fabric.global_rank}] load vqvae')
-        load_ckpt(vqvae, ckpt)
+        if 'state_dict' in ckpt:
+            print(f'[rank {fabric.global_rank}] load discriminator')
+            load_ckpt(loss_module, ckpt, key_prefix='loss.')
+            ckpt['state_dict'] = {
+                k: v
+                for k, v in ckpt['state_dict'].items() if not k.startswith('loss.')
+            }
+            print(f'[rank {fabric.global_rank}] load vqvae')
+            load_ckpt(vqvae, ckpt)
+        else:
+            vqvae.load_state_dict(ckpt['vqvae'])
+            loss_module.discriminator.load_state_dict(ckpt['discriminator'])
     else:
         fabric.load(training_args.resume_ckpt_path, state)
         print(f'resumed from {training_args.resume_ckpt_path}')
