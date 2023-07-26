@@ -70,7 +70,7 @@ def build_lr_scheduler(optimizer: Optimizer, config: LRSchedulerConfig, max_step
 def get_parser():
     parser = ArgumentParser(parser_mode='omegaconf')
     parser.add_argument('-c', '--config', action=ActionConfigFile)
-    parser.add_class_arguments(VQVAEModel, 'vqvae')
+    parser.add_subclass_arguments(VQVAEModel, 'vqvae')
     parser.add_argument('--optimizer_g', type=dict)
     parser.add_argument('--lr_scheduler_g', type=LRSchedulerConfig)
     parser.add_class_arguments(VQGANLoss, 'loss')

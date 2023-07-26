@@ -326,13 +326,16 @@ class Decoder(nn.Module):
 class VQVAEModel(nn.Module):
     is_pretrained: bool = False
 
-    def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict):
+    def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict, pretrained_path: Path | None = None):
         super().__init__()
         self.encoder = Encoder(**ed_kwargs)
         self.decoder = Decoder(**ed_kwargs)
         self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
         self.quantize = VectorQuantizer(**vq_kwargs)
         self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
+        if pretrained_path is not None:
+            load_ckpt(self, pretrained_path, 'vqvae')
+            self.is_pretrained = True
 
     def do_quantize(self, z: SpatialTensor) -> tuple[SpatialTensor, VectorQuantizerOutput]:
         z = self.quant_conv(z)
@@ -348,7 +351,7 @@ class VQVAEModel(nn.Module):
 
     @property
     def stride(self) -> tuple3_t[int]:
-        stride = self.encoder.num_layers + int(not isinstance(self.encoder.additional_interpolation, nn.Identity))
+        stride = 1 << self.encoder.num_layers + int(not isinstance(self.encoder.additional_interpolation, nn.Identity)) - 1
         return (stride, ) * 3
 
     @property
@@ -365,17 +368,6 @@ class VQVAEModel(nn.Module):
         z = self.encoder(x)
         z, quant_out = self.do_quantize(z)
         return quant_out.index
-
-    @classmethod
-    def from_pretrained(cls, conf: PathLike, ckpt: Path) -> Self:
-        from jsonargparse import ArgumentParser
-        parser = ArgumentParser()
-        parser.add_class_arguments(VQVAEModel, 'model')
-        args = parser.parse_args(['--model', str(conf)])
-        model: VQVAEModel = parser.instantiate_classes(args).model
-        load_ckpt(model, ckpt, 'vqvae')
-        model.is_pretrained = True
-        return model
 
 class VQGAN(VQVAEModel, LightningModule):
     def __init__(
