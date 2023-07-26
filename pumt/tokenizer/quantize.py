@@ -32,6 +32,7 @@ class VectorQuantizer(nn.Module):
     ):
         super().__init__()
         self.mode = mode
+        self.num_embeddings = num_embeddings
         if mode == 'nearest':
             self.beta = beta
             self.register_module('proj', None)

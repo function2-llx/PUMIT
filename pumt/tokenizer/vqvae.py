@@ -2,6 +2,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from copy import copy
 from pathlib import Path
+from typing import Self
 
 import cytoolz
 import numpy as np
@@ -13,7 +14,8 @@ from torch.utils.checkpoint import checkpoint
 
 from luolib.models.utils import split_weight_decay_keys, load_ckpt, create_param_groups
 from luolib.utils import DataKey
-from luolib.types import LRSchedulerConfig
+from luolib.types import LRSchedulerConfig, tuple3_t
+from monai.config import PathLike
 
 from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
@@ -175,7 +177,7 @@ class Encoder(nn.Module):
         gradient_checkpointing: bool = False,
     ):
         super().__init__()
-        num_layers = len(layer_channels)
+        self.num_layers = len(layer_channels)
         attn_layer_ids = attn_layer_ids or []
         self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
         self.additional_interpolation = AdaptiveInterpolationDownsample() if additional_interpolation else nn.Identity()
@@ -186,10 +188,10 @@ class Encoder(nn.Module):
                 layer_channels[i],
                 num_res_blocks,
                 use_attn=i in attn_layer_ids,
-                downsample=i != num_layers - 1,
+                downsample=i != self.num_layers - 1,
                 gradient_checkpointing=gradient_checkpointing,
             )
-            for i in range(num_layers)
+            for i in range(self.num_layers)
         ])
         last_channels = layer_channels[-1]
 
@@ -322,6 +324,8 @@ class Decoder(nn.Module):
         return x
 
 class VQVAEModel(nn.Module):
+    is_pretrained: bool = False
+
     def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict):
         super().__init__()
         self.encoder = Encoder(**ed_kwargs)
@@ -341,6 +345,37 @@ class VQVAEModel(nn.Module):
         z, quant_out = self.do_quantize(z)
         x_rec = self.decoder(z)
         return x_rec, quant_out
+
+    @property
+    def stride(self) -> tuple3_t[int]:
+        stride = self.encoder.num_layers + int(not isinstance(self.encoder.additional_interpolation, nn.Identity))
+        return (stride, ) * 3
+
+    @property
+    def codebook_size(self):
+        return self.quantize.num_embeddings
+
+    def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
+        if self.is_pretrained:
+            # make pytorch happy
+            state_dict.update(self.state_dict(prefix=prefix))
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def tokenize(self, x: SpatialTensor):
+        z = self.encoder(x)
+        z, quant_out = self.do_quantize(z)
+        return quant_out.index
+
+    @classmethod
+    def from_pretrained(cls, conf: PathLike, ckpt: Path) -> Self:
+        from jsonargparse import ArgumentParser
+        parser = ArgumentParser()
+        parser.add_class_arguments(VQVAEModel, 'model')
+        args = parser.parse_args(['--model', str(conf)])
+        model: VQVAEModel = parser.instantiate_classes(args).model
+        load_ckpt(model, ckpt, 'vqvae')
+        model.is_pretrained = True
+        return model
 
 class VQGAN(VQVAEModel, LightningModule):
     def __init__(

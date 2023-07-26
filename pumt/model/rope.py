@@ -16,9 +16,6 @@ def rotate_half(x: torch.Tensor):
     return einops.rearrange([-x2, x1], 'r ... d -> ... (d r)')
 
 class SpatialRotaryEmbedding(nn.Module):
-    cos_θ: torch.Tensor | None
-    sin_θ: torch.Tensor | None
-
     @property
     def ω(self) -> list[torch.Tensor]:
         # let's wish we can have nn.BufferList soon: https://github.com/pytorch/pytorch/issues/37386 https://github.com/pytorch/pytorch/issues/35735
@@ -32,6 +29,7 @@ class SpatialRotaryEmbedding(nn.Module):
     ):
         super().__init__()
         assert dim & 1 == 0
+        self.dim = dim
         self.rescale_shape = rescale_shape
         self.merge_hw = merge_hw
         if merge_hw:
@@ -58,15 +56,32 @@ class SpatialRotaryEmbedding(nn.Module):
             θ_hw = θ[1][:, None] + θ[2][None, :]
         return einops.rearrange(θ[0][:, None, None] + θ_hw[None, :], '... d -> (...) d')
 
-    def prepare_batch(self, batch: list[torch.Tensor]):
-        shapes = [tuple(x.shape[1:]) for x in batch]
-        θ = pad_sequence([self.get_θ(shape) for shape in shapes], True)
-        self.cos_θ = einops.repeat(θ.cos(), 'n l d -> n l 1 (d r)', r=2)
-        self.sin_θ = einops.repeat(θ.sin(), 'n l d -> n l 1 (d r)', r=2)
+    def prepare(self, shape: tuple3_t[int], visible_idx: torch.Tensor | None = None):
+        θ = self.get_θ(shape)
+        cos_θ = θ.cos()
+        sin_θ = θ.sin()
+        self.cos_θ = einops.repeat(cos_θ, 'l d -> l 1 (d r)', r=2)
+        self.sin_θ = einops.repeat(sin_θ, 'l d -> l 1 (d r)', r=2)
+        if visible_idx is not None:
+            visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=self.dim).contiguous()
+            batch_size = visible_idx.shape[0]
+            def gather_visible(x: torch.Tensor):
+                x = einops.repeat(x, 'l d -> n l d', n=batch_size)
+                return einops.rearrange(x.gather(dim=1, index=visible_idx), 'n l d -> n l 1 d')
+            self.cos_θ_visible = gather_visible(cos_θ)
+            self.sin_θ_visible = gather_visible(sin_θ)
 
     def forward(self, x: torch.Tensor):
-        return x * self.cos_θ + rotate_half(x) * self.sin_θ
+        if x.shape[1] == self.cos_θ.shape[1]:
+            cos_θ = self.cos_θ
+            sin_θ = self.sin_θ
+        else:
+            cos_θ = self.cos_θ_visible
+            sin_θ = self.sin_θ_visible
+        return x * cos_θ + rotate_half(x) * sin_θ
 
     def reset(self):
         self.cos_θ = None
         self.sin_θ = None
+        self.cos_θ_visible = None
+        self.sin_θ_visible = None
