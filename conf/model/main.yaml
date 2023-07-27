@@ -1,7 +1,7 @@
 model: model.yaml
 data: data.yaml
 trainer:
-  max_steps: 1000
+  max_steps: 500000
   precision: 16-mixed
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger

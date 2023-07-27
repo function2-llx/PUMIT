@@ -21,7 +21,7 @@ class ViTForMIM(ViT, LightningModule):
         self,
         *args,
         tokenizer: VQVAEModel,
-        mask_ratio: float = 0.85,
+        mask_ratio: float,
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
@@ -101,4 +101,6 @@ class ViTForMIM(ViT, LightningModule):
         hidden_states = self(x, visible_idx)[:, 1:]
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         token_probs = self.mim_head(hidden_states[masked_mask])
-        return self.mim_loss(token_probs, token_ids[masked_mask])
+        loss = self.mim_loss(token_probs, token_ids[masked_mask])
+        self.log('train/loss', loss)
+        return loss
