@@ -1,6 +1,4 @@
 from collections.abc import Sequence
-from pathlib import Path
-from typing import Any
 
 import einops
 from lightning import LightningModule
@@ -25,6 +23,7 @@ class ViTForMIM(ViT, LightningModule):
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
         self.mim_head = nn.Linear(self.embed_dim, self.tokenizer.codebook_size)
+        self.mim_loss = nn.CrossEntropyLoss()
 
     def state_dict(self, *args, **kwargs):
         return {
@@ -32,14 +31,13 @@ class ViTForMIM(ViT, LightningModule):
             if k.startswith('tokenizer.')
         }
 
-    def forward(self, x: SpatialTensor):
-        token_ids = self.tokenizer.tokenize(x)
-        x, shape = self.apply_patch_embed(x)
+    def forward(self, x: SpatialTensor, visible_idx: torch.Tensor | None = None):
+        if visible_idx is None:
+            return super().forward(x)
+        x, spatial_shape = self.prepare_seq_input(x)
+        self.rope.prepare(spatial_shape, visible_idx)
         batch_size, seq_len, dim = x.shape
         seq_len -= 1  # exclude cls token
-        num_visible_patches = int(seq_len * (1 - self.mask_ratio))
-        visible_idx, _ = x.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
-        self.rope.prepare(shape, visible_idx)
         visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=dim).contiguous()
         x = torch.cat([
                 self.cls_token.expand(batch_size, 1, -1),
@@ -64,4 +62,11 @@ class ViTForMIM(ViT, LightningModule):
 
     def training_step(self, batch: tuple[torch.Tensor, int], *args, **kwargs):
         x = SpatialTensor(*batch)
-        x = self(x)
+        token_ids = self.tokenizer.tokenize(x)
+        batch_size, seq_len = token_ids.shape[:2]
+        num_visible_patches = int(seq_len * (1 - self.mask_ratio))
+        visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
+        hidden_states = self(x, visible_idx)[:, 1:]
+        masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter_(dim=1, index=visible_idx, value=False)
+        token_probs = self.mim_head(hidden_states[masked_mask])
+        return self.mim_loss(token_probs, token_ids[masked_mask])

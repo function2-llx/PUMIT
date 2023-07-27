@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Self
 
 import cytoolz
+import einops
 import numpy as np
 from lightning import LightningModule
 from lightning.pytorch.cli import instantiate_class
@@ -337,16 +338,20 @@ class VQVAEModel(nn.Module):
             load_ckpt(self, pretrained_path, 'vqvae')
             self.is_pretrained = True
 
-    def do_quantize(self, z: SpatialTensor) -> tuple[SpatialTensor, VectorQuantizerOutput]:
+    def do_quantize(self, z: SpatialTensor) -> VectorQuantizerOutput:
         z = self.quant_conv(z)
         quant_out: VectorQuantizerOutput = self.quantize(z)
-        z = self.post_quant_conv(quant_out.z_q)
-        return z, quant_out
+        return quant_out
+
+    def decode(self, z_q: torch.Tensor):
+        z = self.post_quant_conv(z_q)
+        x_rec = self.decoder(z)
+        return x_rec
 
     def forward(self, x: SpatialTensor) -> tuple[torch.Tensor, VectorQuantizerOutput]:
         z = self.encoder(x)
-        z, quant_out = self.do_quantize(z)
-        x_rec = self.decoder(z)
+        quant_out = self.do_quantize(z)
+        x_rec = self.decode(quant_out.z_q)
         return x_rec, quant_out
 
     @property
@@ -364,10 +369,13 @@ class VQVAEModel(nn.Module):
             state_dict.update(self.state_dict(prefix=prefix))
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def tokenize(self, x: SpatialTensor):
+    def tokenize(self, x: SpatialTensor, flatten: bool = True):
         z = self.encoder(x)
-        z, quant_out = self.do_quantize(z)
-        return quant_out.index
+        quant_out = self.do_quantize(z)
+        index = quant_out.index
+        if flatten:
+            index = einops.rearrange(index, 'n ... d -> n (...) d').as_tensor()
+        return index
 
     def load_pretrained(self, path: PathLike):
         load_ckpt(self, path, 'vqvae')

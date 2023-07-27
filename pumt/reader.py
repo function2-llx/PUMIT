@@ -30,6 +30,7 @@ class PUMTReader(mt.Randomizable, ImageReader):
     def get_data(self, img: np.memmap) -> tuple[np.ndarray, dict]:
         return img, {
             MetaKeys.AFFINE: np.eye(4),
+            # spacing is stored in images-meta.xlsx, we'll set affine later in `UpdateSpacingD`
             MetaKeys.ORIGINAL_AFFINE: np.eye(4),
             MetaKeys.SPATIAL_SHAPE: img.shape[1:],
             MetaKeys.ORIGINAL_CHANNEL_DIM: 0,

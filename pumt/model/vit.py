@@ -17,7 +17,7 @@ from pumt.conv import InflatableConv3d, SpatialTensor
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = False):
+    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = True):
         super().__init__()
         self.patch_size = ensure_tuple_rep(patch_size, 3)
         self.proj = InflatableConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
@@ -184,7 +184,7 @@ class ViT(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
-        self.patch_embed = PatchEmbed(patch_size, in_chans, embed_dim)
+        self.patch_embed = PatchEmbed(patch_size, in_chans, embed_dim, flatten=False)
         self.cls_token = NoWeightDecayParameter(torch.empty(1, 1, embed_dim))
         self.pos_embed = NoWeightDecayParameter(torch.empty(1, embed_dim, *pos_embed_shape))
         self.pretrained_pos_embed_shape = pretrained_pos_embed_shape
@@ -213,7 +213,7 @@ class ViT(nn.Module):
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
 
-    def apply_patch_embed(self, x: SpatialTensor):
+    def prepare_seq_input(self, x: SpatialTensor):
         x = self.patch_embed(x)
         shape = x.shape[2:]
         x += resample(self.pos_embed, shape)
@@ -228,7 +228,7 @@ class ViT(nn.Module):
         return x, shape
 
     def forward(self, x: SpatialTensor):
-        x, shape = self.apply_patch_embed(x)
+        x, shape = self.prepare_seq_input(x)
         self.rope.prepare(shape)
         for block in self.blocks:
             if self.grad_ckpt:
