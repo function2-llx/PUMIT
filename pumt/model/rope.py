@@ -38,11 +38,15 @@ class SpatialRotaryEmbedding(nn.Module):
         else:
             dim = [dim, dim, dim]
         for i in range(3):
-            self.register_buffer(f'ω{i}', torch.pow(base[i], -torch.arange(0, dim[i], 2) / dim[i]), False)
+            if merge_hw and i > 0:
+                exp = -torch.arange(0, dim[i], 2) / dim[i]
+            else:
+                exp = -torch.arange(2, dim[i] + 2, 2) / (dim[i] + 2)
+            self.register_buffer(f'ω{i}', torch.pow(base[i], exp), False)
         self.reset()
 
     @cache
-    def get_θ(self, shape: tuple3_t[int]):
+    def get_θ(self, shape: tuple3_t[int]) -> torch.Tensor:
         θ = [
             torch.outer(
                 torch.arange(shape[i], device=self.ω[i].device) * self.rescale_shape[i] / shape[i],
@@ -54,7 +58,8 @@ class SpatialRotaryEmbedding(nn.Module):
             θ_hw = broadcast_cat(θ[1][:, None], θ[2][None, :])
         else:
             θ_hw = θ[1][:, None] + θ[2][None, :]
-        return einops.rearrange(θ[0][:, None, None] + θ_hw[None, :], '... d -> (...) d')
+        θ = θ[0][:, None, None] + θ_hw[None, :]
+        return einops.rearrange(θ, '... d -> (...) d')
 
     def prepare(self, shape: tuple3_t[int], visible_idx: torch.Tensor | None = None):
         θ = self.get_θ(shape)
@@ -63,11 +68,12 @@ class SpatialRotaryEmbedding(nn.Module):
         self.cos_θ = einops.repeat(cos_θ, 'l d -> l 1 (d r)', r=2)
         self.sin_θ = einops.repeat(sin_θ, 'l d -> l 1 (d r)', r=2)
         if visible_idx is not None:
-            visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=self.dim).contiguous()
+            visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=self.dim >> 1).contiguous()
             batch_size = visible_idx.shape[0]
             def gather_visible(x: torch.Tensor):
                 x = einops.repeat(x, 'l d -> n l d', n=batch_size)
-                return einops.rearrange(x.gather(dim=1, index=visible_idx), 'n l d -> n l 1 d')
+                x = x.gather(dim=1, index=visible_idx)
+                return einops.repeat(x, 'n l d -> n l 1 (d r)', r=2)
             self.cos_θ_visible = gather_visible(cos_θ)
             self.sin_θ_visible = gather_visible(sin_θ)
 

@@ -213,7 +213,7 @@ class ViT(nn.Module):
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
 
-    def apply_patch_embed(self, x: torch.Tensor):
+    def apply_patch_embed(self, x: SpatialTensor):
         x = self.patch_embed(x)
         shape = x.shape[2:]
         x += resample(self.pos_embed, shape)
@@ -227,7 +227,7 @@ class ViT(nn.Module):
         )
         return x, shape
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: SpatialTensor):
         x, shape = self.apply_patch_embed(x)
         self.rope.prepare(shape)
         for block in self.blocks:

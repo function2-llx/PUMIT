@@ -369,6 +369,10 @@ class VQVAEModel(nn.Module):
         z, quant_out = self.do_quantize(z)
         return quant_out.index
 
+    def load_pretrained(self, path: PathLike):
+        load_ckpt(self, path, 'vqvae')
+        self.is_pretrained = True
+
 class VQGAN(VQVAEModel, LightningModule):
     def __init__(
         self,

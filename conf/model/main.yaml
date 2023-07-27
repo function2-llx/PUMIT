@@ -1,7 +1,7 @@
 model:
   pretrained_pos_embed_shape: [16, 16]
-  tokenizer: ../tokenizer/vqvae.yaml
-#  tokenizer:
-#    init_args:
-#      pretrained_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=70000.ckpt
+  tokenizer:
+    class_path: pumt.tokenizer.VQVAEModel
+    init_args:
+      pretrained_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=100000.ckpt
   mask_layer_ids: []
