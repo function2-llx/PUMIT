@@ -4,7 +4,7 @@ init_args:
   tokenizer:
     class_path: pumt.tokenizer.VQVAEModel
     init_args:
-      pretrained_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=140000.ckpt
+      pretrained_path: pre-trained/tokenizer.ckpt
   optimizer:
     class_path: torch.optim.AdamW
     init_args:

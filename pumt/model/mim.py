@@ -8,6 +8,7 @@ import torch
 from torch import nn
 from torch.utils import checkpoint
 
+from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
 from pumt.conv import SpatialTensor
 from pumt.optim import build_lr_scheduler, build_optimizer
@@ -24,6 +25,7 @@ class ViTForMIM(ViT, LightningModule):
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
+        eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):
         """mask_layer_ids: layers that include mask tokens as input"""
@@ -38,6 +40,8 @@ class ViTForMIM(ViT, LightningModule):
         self.mim_loss = nn.CrossEntropyLoss()
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        if eva02_pretrained_path is not None:
+            load_ckpt(self, eva02_pretrained_path, 'module')
 
     def state_dict(self, *args, **kwargs):
         return {
