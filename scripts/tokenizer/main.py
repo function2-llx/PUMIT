@@ -132,7 +132,7 @@ def main():
         save_dir.mkdir(parents=True)
         ckpt_save_dir.mkdir()
         conf_save_dir.mkdir()
-        parser.save(raw_args, conf_save_dir / 'main.yaml')
+        parser.save(raw_args, conf_save_dir / 'main.yaml', multifile=False)
 
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = True
