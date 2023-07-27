@@ -1,0 +1,23 @@
+class_path: pumt.model.ViTForMIM
+init_args:
+  pretrained_pos_embed_shape: [16, 16]
+  tokenizer:
+    class_path: pumt.tokenizer.VQVAEModel
+    init_args:
+      pretrained_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=130000.ckpt
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 1e-4
+      weight_decay: 5e-2
+      betas: [0.9, 0.99]
+  lr_scheduler:
+    scheduler:
+      class_path: timm.scheduler.CosineLRScheduler
+      init_args:
+        t_in_epochs: false
+        lr_min: 1e-6
+        warmup_t: 5000
+        warmup_prefix: true
+    interval: step
+    frequency: 100

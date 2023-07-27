@@ -1,8 +1,41 @@
-model:
-  class_path: pumt.model.ViTForMIM
+model: model.yaml
+data:
+  class_path: pumt.PUMTDataModule
   init_args:
-    pretrained_pos_embed_shape: [16, 16]
-    tokenizer:
-      class_path: pumt.tokenizer.VQVAEModel
-      init_args:
-        pretrained_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=100000.ckpt
+    dataset_weights:
+      IDRiD: 0.5
+      BUSI: 0.4
+      iChallenge-ADAM: 0.2
+      iChallenge-PALM: 0.2
+      HC18: 0.2
+      Chákṣu: 0.2
+      iChallenge-REFUGE2: 0.1
+      Kaggle-RDC: 0.1
+      CheXpert: 0.007
+      NIHChestX-ray: 0.007
+      IXI: 0.5
+      RSNA-2022-CSFD: 0.6
+      BraTS2023-MEN: 0.5
+      BraTS2023-GLI: 0.4
+      RSNA-2020-PED: 0.3
+      PI-CAI: 0.25
+    dl_conf:
+      train_batch_size: 8
+    trans_conf:
+      train_tz: 8
+      train_tx: 12
+      train_scale_x: [0.75, 2.0]
+trainer:
+  max_steps: 1000
+  precision: 16-mixed
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: mim
+      save_dir: output/mim
+      project: PUMT-MIM
+  val_check_interval: 100
+  check_val_every_n_epoch: null
+  log_every_n_steps: 10
+  benchmark: true
+seed_everything: 666

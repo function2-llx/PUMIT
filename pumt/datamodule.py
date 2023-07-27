@@ -149,7 +149,7 @@ class PUMTDataModule(LightningDataModule):
         dataset_weights: dict[str, float],
         dl_conf: DataLoaderConf,
         trans_conf: TransformConf,
-        seed: int = 42,
+        seed: int | None = 42,
     ):
         super().__init__()
         self.train_data = pd.DataFrame()

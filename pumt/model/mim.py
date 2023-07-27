@@ -1,19 +1,31 @@
 from collections.abc import Sequence
+from pathlib import Path
 
 import einops
 from lightning import LightningModule
+from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 import torch
 from torch import nn
 from torch.utils import checkpoint
 
-from luolib.types import NoWeightDecayParameter
+from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
+from pumt.conv import SpatialTensor
+from pumt.optim import build_lr_scheduler, build_optimizer
+from pumt.tokenizer import VQVAEModel
 from .vit import ViT
-from ..conv import SpatialTensor
-from ..tokenizer import VQVAEModel
 
 class ViTForMIM(ViT, LightningModule):
     # tokenizer typed as dict https://github.com/omni-us/jsonargparse/issues/330
-    def __init__(self, *args, tokenizer: VQVAEModel, mask_ratio: float = 0.85, mask_layer_ids: Sequence[int], **kwargs):
+    def __init__(
+        self,
+        *args,
+        tokenizer: VQVAEModel,
+        mask_ratio: float = 0.85,
+        mask_layer_ids: Sequence[int],
+        optimizer: dict | None = None,
+        lr_scheduler: LRSchedulerConfig | None = None,
+        **kwargs,
+    ):
         """mask_layer_ids: layers that include mask tokens as input"""
         super().__init__(*args, **kwargs)
         self.tokenizer = tokenizer
@@ -24,6 +36,8 @@ class ViTForMIM(ViT, LightningModule):
         self.mask_layer_ids = set(mask_layer_ids)
         self.mim_head = nn.Linear(self.embed_dim, self.tokenizer.codebook_size)
         self.mim_loss = nn.CrossEntropyLoss()
+        self.optimizer = optimizer
+        self.lr_scheduler = lr_scheduler
 
     def state_dict(self, *args, **kwargs):
         return {
@@ -38,6 +52,7 @@ class ViTForMIM(ViT, LightningModule):
         self.rope.prepare(spatial_shape, visible_idx)
         batch_size, seq_len, dim = x.shape
         seq_len -= 1  # exclude cls token
+        # FIXME: here's a bug
         visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=dim).contiguous()
         x = torch.cat([
                 self.cls_token.expand(batch_size, 1, -1),
@@ -56,17 +71,31 @@ class ViTForMIM(ViT, LightningModule):
             if i in self.mask_layer_ids:
                 x = x_layer
             else:
-                x.scatter_(dim=1, index=visible_idx, src=x_layer)
+                x = x.scatter(dim=1, index=visible_idx, src=x_layer)
         self.rope.reset()
         return self.norm(x)
 
-    def training_step(self, batch: tuple[torch.Tensor, int], *args, **kwargs):
-        x = SpatialTensor(*batch)
+    def configure_optimizers(self):
+        return {
+            'optimizer': (optimizer := build_optimizer(self, self.optimizer)),
+            'lr_scheduler': vars(build_lr_scheduler(optimizer, self.lr_scheduler, self.trainer.max_steps)),
+        }
+
+    def lr_scheduler_step(self, scheduler: TIMMScheduler, metric=None):
+        scheduler.step_update(self.global_step + 1, metric)
+
+    def on_train_start(self) -> None:
+        scheduler: TIMMScheduler = self.lr_schedulers()
+        # https://github.com/Lightning-AI/lightning/issues/17972
+        scheduler.step_update(0)
+
+    def training_step(self, batch: tuple[torch.Tensor, int, Path], *args, **kwargs):
+        x = SpatialTensor(*batch[:2])
         token_ids = self.tokenizer.tokenize(x)
         batch_size, seq_len = token_ids.shape[:2]
         num_visible_patches = int(seq_len * (1 - self.mask_ratio))
         visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
         hidden_states = self(x, visible_idx)[:, 1:]
-        masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter_(dim=1, index=visible_idx, value=False)
+        masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         token_probs = self.mim_head(hidden_states[masked_mask])
         return self.mim_loss(token_probs, token_ids[masked_mask])

@@ -4,20 +4,19 @@ from typing import cast
 
 from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as LightningFabric
-from lightning.pytorch.cli import instantiate_class
 from lightning.pytorch.loggers import WandbLogger
 import math
 import torch
-from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
 
-from luolib.models.utils import create_param_groups, load_ckpt, split_weight_decay_keys
+from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
 from pumt.conv import SpatialTensor
 from pumt.datamodule import PUMTDataModule
+from pumt.optim import build_optimizer, build_lr_scheduler
 from pumt.tokenizer import VQVAEModel, VQGANLoss
 
 class Fabric(LightningFabric):
@@ -52,20 +51,6 @@ class TrainingArguments:
     disc_loss_ema_init: float = 1.
     disc_loss_momentum: float = 0.85
     use_gan_th: float = 0.15
-
-def build_optimizer(model: nn.Module, optimizer_conf: dict):
-    decay_keys, no_decay_keys = split_weight_decay_keys(model)
-    return instantiate_class(
-        create_param_groups(model.named_parameters(), decay_keys, no_decay_keys),
-        optimizer_conf,
-    )
-
-def build_lr_scheduler(optimizer: Optimizer, config: LRSchedulerConfig, max_steps: int) -> LRSchedulerConfig:
-    config.scheduler['init_args']['t_initial'] = max_steps
-    config.scheduler = instantiate_class(optimizer, config.scheduler)
-    from timm.scheduler.scheduler import Scheduler as TIMMScheduler
-    assert isinstance(config.scheduler, TIMMScheduler)
-    return config
 
 def get_parser():
     parser = ArgumentParser(parser_mode='omegaconf')
