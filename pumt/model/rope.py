@@ -45,7 +45,7 @@ class SpatialRotaryEmbedding(nn.Module):
         self.reset()
 
     @cache
-    def get_θ(self, shape: tuple3_t[int]) -> torch.Tensor:
+    def get_rotation(self, shape: tuple3_t[int]) -> tuple[torch.Tensor, torch.Tensor]:
         θ = [
             torch.outer(
                 torch.arange(shape[i], device=self.ω[i].device) * self.rescale_shape[i] / shape[i],
@@ -58,12 +58,11 @@ class SpatialRotaryEmbedding(nn.Module):
         else:
             θ_hw = θ[1][:, None] + θ[2][None, :]
         θ = θ[0][:, None, None] + θ_hw[None, :]
-        return einops.rearrange(θ, '... d -> (...) d')
+        θ = einops.rearrange(θ, '... d -> (...) d')
+        return θ.cos(), θ.sin()
 
     def prepare(self, shape: tuple3_t[int], visible_idx: torch.Tensor | None = None):
-        θ = self.get_θ(shape)
-        cos_θ = θ.cos()
-        sin_θ = θ.sin()
+        cos_θ, sin_θ = self.get_rotation(shape)
         self.cos_θ = einops.repeat(cos_θ, 'l d -> l 1 (d r)', r=2)
         self.sin_θ = einops.repeat(sin_θ, 'l d -> l 1 (d r)', r=2)
         if visible_idx is not None:
