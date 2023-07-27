@@ -52,16 +52,15 @@ class ViTForMIM(ViT, LightningModule):
         self.rope.prepare(spatial_shape, visible_idx)
         batch_size, seq_len, dim = x.shape
         seq_len -= 1  # exclude cls token
-        # FIXME: here's a bug
+        # cls token should always be visible
+        visible_idx = torch.cat([visible_idx.new_zeros(batch_size, 1), visible_idx + 1], dim=1)
         visible_idx = einops.repeat(visible_idx, 'n l -> n l d', d=dim).contiguous()
         x = torch.cat([
                 self.cls_token.expand(batch_size, 1, -1),
-                self.mask_token.expand(batch_size, seq_len, -1).scatter(dim=1, index=visible_idx, src=x),
+                self.mask_token.expand(batch_size, seq_len, -1),
             ],
             dim=1,
-        )
-        # cls token should always be visible
-        visible_idx = torch.cat([visible_idx.new_zeros(batch_size, 1, dim), visible_idx + 1], dim=1)
+        ).scatter_(dim=1, index=visible_idx, src=x.gather(dim=1, index=visible_idx))
         for i, block in enumerate(self.blocks):
             x_layer = x if i in self.mask_layer_ids else x.gather(dim=1, index=visible_idx)
             if self.grad_ckpt:

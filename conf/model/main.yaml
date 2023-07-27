@@ -1,30 +1,5 @@
 model: model.yaml
-data:
-  class_path: pumt.PUMTDataModule
-  init_args:
-    dataset_weights:
-      IDRiD: 0.5
-      BUSI: 0.4
-      iChallenge-ADAM: 0.2
-      iChallenge-PALM: 0.2
-      HC18: 0.2
-      Chákṣu: 0.2
-      iChallenge-REFUGE2: 0.1
-      Kaggle-RDC: 0.1
-      CheXpert: 0.007
-      NIHChestX-ray: 0.007
-      IXI: 0.5
-      RSNA-2022-CSFD: 0.6
-      BraTS2023-MEN: 0.5
-      BraTS2023-GLI: 0.4
-      RSNA-2020-PED: 0.3
-      PI-CAI: 0.25
-    dl_conf:
-      train_batch_size: 8
-    trans_conf:
-      train_tz: 8
-      train_tx: 12
-      train_scale_x: [0.75, 2.0]
+data: data.yaml
 trainer:
   max_steps: 1000
   precision: 16-mixed
