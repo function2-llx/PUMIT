@@ -3,7 +3,6 @@ from pathlib import Path
 from PIL import Image
 import einops
 from jsonargparse import ArgumentParser
-import pytorch_lightning as pl
 import torch
 from torchvision import transforms as tvt
 from torchvision.utils import save_image

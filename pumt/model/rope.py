@@ -1,4 +1,4 @@
-from functools import cache
+from functools import lru_cache
 
 import einops
 import torch
@@ -44,7 +44,7 @@ class SpatialRotaryEmbedding(nn.Module):
             self.register_buffer(f'ω{i}', torch.pow(base[i], exp), False)
         self.reset()
 
-    @cache
+    @lru_cache
     def get_rotation(self, spatial_shape: tuple3_t[int]) -> tuple[torch.Tensor, torch.Tensor]:
         θ = [
             torch.outer(
@@ -76,7 +76,7 @@ class SpatialRotaryEmbedding(nn.Module):
             self.sin_θ_visible = gather_visible(sin_θ)
 
     def forward(self, x: torch.Tensor):
-        if x.shape[1] == self.cos_θ.shape[1]:
+        if x.shape[1] == self.cos_θ.shape[0]:
             cos_θ = self.cos_θ
             sin_θ = self.sin_θ
         else:

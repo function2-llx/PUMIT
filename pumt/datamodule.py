@@ -50,7 +50,7 @@ class TransformConf:
     gamma_p: float = 0.3
     stride: int = 16
 
-class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
+class PUMTDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
     def __init__(
         self,
         data: list[dict],
@@ -132,7 +132,7 @@ class DistributedTokenizerBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
-class TokenizerDataset(TorchDataset):
+class PUMTDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
         self.transform = transform
@@ -143,7 +143,7 @@ class TokenizerDataset(TorchDataset):
         data['_trans'] = trans
         return mt.apply_transform(self.transform, data)
 
-class TokenizerDataModule(LightningDataModule):
+class PUMTDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_weights: dict[str, float],
@@ -220,9 +220,9 @@ class TokenizerDataModule(LightningDataModule):
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
         return DataLoader(
-            TokenizerDataset(data, self.train_transform()),
+            PUMTDataset(data, self.train_transform()),
             conf.num_workers,
-            batch_sampler=DistributedTokenizerBatchSampler(
+            batch_sampler=PUMTDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
                 world_size, rank, self.R, conf.train_batch_size, weight,
             ),

@@ -17,8 +17,8 @@ from tqdm import tqdm
 from luolib.models.utils import create_param_groups, load_ckpt, split_weight_decay_keys
 from luolib.types import LRSchedulerConfig
 from pumt.conv import SpatialTensor
-from pumt.tokenizer import TokenizerDataModule, VQVAEModel
-from pumt.tokenizer.loss import VQGANLoss
+from pumt.datamodule import PUMTDataModule
+from pumt.tokenizer import VQVAEModel, VQGANLoss
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -76,7 +76,7 @@ def get_parser():
     parser.add_class_arguments(VQGANLoss, 'loss')
     parser.add_argument('--optimizer_d', type=dict)
     parser.add_argument('--lr_scheduler_d', type=LRSchedulerConfig)
-    parser.add_class_arguments(TokenizerDataModule, 'data')
+    parser.add_class_arguments(PUMTDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
     parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
     parser.link_arguments('training.seed', 'data.seed')
@@ -189,7 +189,7 @@ def main():
     vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
-    datamodule: TokenizerDataModule = args.data
+    datamodule: PUMTDataModule = args.data
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(fabric.world_size, fabric.global_rank, optimized_steps),
         datamodule.val_dataloader(),
