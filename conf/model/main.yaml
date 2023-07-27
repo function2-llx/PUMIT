@@ -13,4 +13,5 @@ trainer:
   check_val_every_n_epoch: null
   log_every_n_steps: 10
   benchmark: true
+  use_distributed_sampler: false
 seed_everything: 666
