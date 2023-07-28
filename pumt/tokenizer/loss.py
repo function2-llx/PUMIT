@@ -122,7 +122,7 @@ class VQGANLoss(nn.Module):
         if use_gan_loss:
             gan_weight = self.gan_weight
             if self.adaptive_gan_weight:
-                calculate_adaptive_weight(
+                gan_weight *= calculate_adaptive_weight(
                     vq_loss.as_subclass(torch.Tensor),
                     gan_loss.as_subclass(torch.Tensor),
                     ref_param,
