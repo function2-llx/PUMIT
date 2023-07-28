@@ -127,12 +127,10 @@ def main():
     save_dir = fabric.broadcast(save_dir)
     img_save_dir = save_dir / 'images'
     ckpt_save_dir = save_dir / 'checkpoints'
-    conf_save_dir = save_dir / 'conf'
     if fabric.is_global_zero:
         save_dir.mkdir(parents=True)
         ckpt_save_dir.mkdir()
-        conf_save_dir.mkdir()
-        parser.save(raw_args, conf_save_dir / 'main.yaml', multifile=False)
+        parser.save(raw_args, save_dir / 'conf.yaml', multifile=False)
 
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = True
