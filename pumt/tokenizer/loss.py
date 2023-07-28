@@ -41,6 +41,7 @@ class VQGANLoss(nn.Module):
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
+        adaptive_gan_weight: bool = True,
         disc_in_channels: int = 3,
         disc_num_downsample_layers: int = 3,
         disc_base_channels: int = 64,
@@ -60,6 +61,7 @@ class VQGANLoss(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.max_perceptual_slices = max_perceptual_slices
         self.gan_weight = gan_weight
+        self.adaptive_gan_weight = adaptive_gan_weight
 
         self.discriminator = PatchDiscriminator(disc_in_channels, disc_num_downsample_layers, disc_base_channels)
         print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
@@ -92,7 +94,7 @@ class VQGANLoss(nn.Module):
         x_rec: SpatialTensor,
         quant_loss: torch.Tensor,
         use_gan_loss: bool,
-        ref_param: nn.Parameter,
+        ref_param: nn.Parameter | None = None,
         fabric: Fabric | None = None,
     ) -> tuple[torch.Tensor, dict]:
         rec_loss = self.rec_loss(x, x_rec)
@@ -118,12 +120,14 @@ class VQGANLoss(nn.Module):
         score_fake = self.discriminator(x_rec)
         gan_loss = -score_fake.mean()
         if use_gan_loss:
-            gan_weight = self.gan_weight * calculate_adaptive_weight(
-                vq_loss.as_subclass(torch.Tensor),
-                gan_loss.as_subclass(torch.Tensor),
-                ref_param,
-                fabric=fabric,
-            )
+            gan_weight = self.gan_weight
+            if self.adaptive_gan_weight:
+                calculate_adaptive_weight(
+                    vq_loss.as_subclass(torch.Tensor),
+                    gan_loss.as_subclass(torch.Tensor),
+                    ref_param,
+                    fabric=fabric,
+                )
         else:
             gan_weight = 0
         loss = vq_loss + gan_weight * gan_loss
