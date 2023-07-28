@@ -32,6 +32,7 @@ class CLI(LightningCLI):
 
     def before_instantiate_classes(self):
         if self.subcommand == 'fit':
+            # https://github.com/wandb/wandb/issues/714#issuecomment-565870686
             save_dir = self.config.fit.trainer.logger.init_args.save_dir
             Path(save_dir).mkdir(exist_ok=True, parents=True)
 

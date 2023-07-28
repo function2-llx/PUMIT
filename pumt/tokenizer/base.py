@@ -5,10 +5,11 @@ import torch
 from torch import nn
 
 from luolib.types import tuple3_t
-from pumt.conv import SpatialTensor
+
+from pumt import sac
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 
-class VQTokenizerBase(ABC, nn.Module):
+class VQTokenizer(ABC, nn.Module):
     is_pretrained: bool = False
 
     def __init__(self, vq_kwargs: dict, *args, **kwargs):
@@ -18,6 +19,7 @@ class VQTokenizerBase(ABC, nn.Module):
     @property
     @abstractmethod
     def stride(self) -> tuple3_t[int]:
+        # watch out: https://github.com/pytorch/pytorch/issues/49726
         pass
 
     @property
@@ -25,14 +27,14 @@ class VQTokenizerBase(ABC, nn.Module):
         return self.quantize.num_embeddings
 
     @abstractmethod
-    def encode(self, x: SpatialTensor) -> SpatialTensor:
+    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         pass
 
     @abstractmethod
-    def decode(self, x: SpatialTensor) -> SpatialTensor:
+    def decode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         pass
 
-    def forward(self, x: SpatialTensor) -> tuple[SpatialTensor, VectorQuantizerOutput]:
+    def forward(self, x: sac.SpatialTensor) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:
         z = self.encode(x)
         quant_out: VectorQuantizerOutput = self.quantize(z)
         x_rec = self.decode(quant_out.z_q)
@@ -44,10 +46,13 @@ class VQTokenizerBase(ABC, nn.Module):
             state_dict.update(self.state_dict(prefix=prefix))
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def tokenize(self, x: SpatialTensor, flatten: bool = True) -> torch.Tensor:
+    def tokenize(self, x: sac.SpatialTensor, flatten: bool = True) -> torch.Tensor:
         z = self.encode(x)
         quant_out: VectorQuantizerOutput = self.quantize(z)
         index = quant_out.index
         if flatten:
-            index = einops.rearrange(index, 'n ... d -> n (...) d').as_tensor()
+            index = einops.rearrange(index.as_tensor(), 'n ... d -> n (...) d')
         return index
+
+    def get_ref_param(self) -> nn.Parameter | None:
+        return None

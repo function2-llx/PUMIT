@@ -2,7 +2,7 @@ vqvae: vqvae.yaml
 optimizer_g:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 2e-5
+    lr: 1e-5
     weight_decay: 5e-2
 lr_scheduler_g:
   scheduler:
@@ -16,12 +16,13 @@ lr_scheduler_g:
   frequency: 100
 loss:
   quant_weight: 1e-7
-  gan_weight: 6
+  gan_weight: 1e-3
+  adaptive_gan_weight: false
   max_perceptual_slices: 24
 optimizer_d:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 2e-4
+    lr: 1e-4
     weight_decay: 5e-2
 lr_scheduler_d:
   scheduler:
@@ -33,33 +34,10 @@ lr_scheduler_d:
       warmup_prefix: true
   interval: step
   frequency: 100
-data:
-  dataset_weights:
-    IDRiD: 0.5
-    BUSI: 0.4
-    iChallenge-ADAM: 0.2
-    iChallenge-PALM: 0.2
-    HC18: 0.2
-    Chákṣu: 0.2
-    iChallenge-REFUGE2: 0.1
-    Kaggle-RDC: 0.1
-    CheXpert: 0.007
-    NIHChestX-ray: 0.007
-    IXI: 0.5
-    RSNA-2022-CSFD: 0.6
-    BraTS2023-MEN: 0.5
-    BraTS2023-GLI: 0.4
-    RSNA-2020-PED: 0.3
-    PI-CAI: 0.25
-  dl_conf:
-    train_batch_size: 8
-  trans_conf:
-    train_tz: 3
-    train_tx: 8
-    train_scale_x: [0.75, 2.0]
+data: data.yaml
 training:
-  seed: 233
-  max_steps: 200000
-  pretrained_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt
+  seed: 777
+  max_steps: 100000
+  pretrained_ckpt_path: output/tokenizer/run-20230726_021033-zdffhgt5/checkpoints/step=200000.ckpt
   disc_loss_momentum: 0.9
-  use_gan_th: 0.035
+  use_gan_th: 0.03

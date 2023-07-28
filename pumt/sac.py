@@ -1,4 +1,5 @@
-import abc
+# sac stands for spatially adaptive convolution
+
 from collections.abc import Iterable, Sequence
 from typing import Literal
 
@@ -20,7 +21,7 @@ class SpatialTensor(torch.Tensor):
 
     def __init__(self, _x, aniso_d: int, *_args, **_kwargs):
         super().__init__()
-        self._aniso_d = aniso_d
+        self.aniso_d = aniso_d
         self.num_downsamples = 0
 
     def __repr__(self, *args, **kwargs):
@@ -29,16 +30,20 @@ class SpatialTensor(torch.Tensor):
         return f'shape={self.shape}, aniso_d={aniso_d}, num_downsamples={num_downsamples}\n{super().__repr__()}'
 
     @property
-    def aniso_d(self):
-        return max(self._aniso_d - self.num_downsamples, 0)
+    def num_pending_hw_downsamples(self):
+        return max(self.aniso_d - self.num_downsamples, 0)
 
     @property
-    def downsample_ready(self) -> bool:
-        return self.aniso_d == 0
+    def can_downsample_d(self) -> bool:
+        return self.num_pending_hw_downsamples == 0
 
     @property
-    def upsample_ready(self) -> bool:
-        return self._aniso_d < self.num_downsamples
+    def num_remained_d_upsamples(self) -> int:
+        return max(self.num_downsamples - self.aniso_d, 0)
+
+    @property
+    def can_upsample_d(self) -> bool:
+        return self.num_remained_d_upsamples > 0
 
     @classmethod
     def find_meta_ref_iter(cls, iterable: Iterable):
@@ -74,7 +79,7 @@ class SpatialTensor(torch.Tensor):
             meta_ref: SpatialTensor
             for x in ret:
                 if isinstance(x, SpatialTensor):
-                    x._aniso_d = meta_ref._aniso_d
+                    x.aniso_d = meta_ref.aniso_d
                     x.num_downsamples = meta_ref.num_downsamples
         if unpack:
             ret = ret[0]
@@ -86,7 +91,10 @@ class SpatialTensor(torch.Tensor):
 class InflatableConv3d(nn.Conv3d):
     def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
         super().__init__(*args, **kwargs)
-        assert self.stride[0] & (self.stride[0] - 1) == 0, 'only support power of 2'
+        for stride in self.stride:
+            assert stride & stride - 1 == 0, 'only support power of 2'
+        assert self.stride[1] == self.stride[2], 'only support stride_h == stride_w'
+        self.num_downsamples = self.stride[1].bit_length() - 1
         assert self.padding_mode == 'zeros'
         assert d_inflation in ['average', 'center']
         self.inflation = d_inflation
@@ -113,7 +121,7 @@ class InflatableConv3d(nn.Conv3d):
     def forward(self, x: SpatialTensor):
         stride = list(self.stride)
         padding = list(self.padding)
-        stride[0] = max(self.stride[0] >> x.aniso_d, 1)
+        stride[0] = max(self.stride[0] >> x.num_pending_hw_downsamples, 1)
         if stride[0] == self.stride[0]:
             weight = self.weight
         else:
@@ -128,7 +136,9 @@ class InflatableConv3d(nn.Conv3d):
                     'sum',
                     dr=stride[0],
                 )
-        return nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
+        x: SpatialTensor = nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
+        x.num_downsamples += self.num_downsamples
+        return x
 
 class InflatableInputConv3d(InflatableConv3d):
     def __init__(self, *args, force: bool = False, **kwargs):
@@ -183,31 +193,23 @@ class InflatableOutputConv3d(InflatableConv3d):
             state_dict[bias_key] = bias
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-class AdaptiveDownsample(nn.Module, abc.ABC):
-    @abc.abstractmethod
-    def downsample(self, x: SpatialTensor) -> SpatialTensor:
-        pass
-
-    def forward(self, x: SpatialTensor):
-        x = self.downsample(x)
-        x.num_downsamples += 1
-        return x
-
-class AdaptiveInterpolationDownsample(AdaptiveDownsample):
+class AdaptiveInterpolationDownsample(nn.Module):
     def __init__(self, mode: InterpolateMode = InterpolateMode.AREA, antialias: bool = False):
         super().__init__()
         self.mode = mode
         self.antialias = antialias
 
-    def downsample(self, x: SpatialTensor):
-        return nnf.interpolate(
+    def forward(self, x: SpatialTensor):
+        x = nnf.interpolate(
             x,
-            scale_factor=(0.5 if x.downsample_ready else 1, 0.5, 0.5),
+            scale_factor=(0.5 if x.can_downsample_d else 1, 0.5, 0.5),
             mode=self.mode,
             antialias=self.antialias,
         )
+        x.num_downsamples += 1
+        return x
 
-class AdaptiveConvDownsample(AdaptiveDownsample):
+class AdaptiveConvDownsample(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -228,7 +230,7 @@ class AdaptiveConvDownsample(AdaptiveDownsample):
             d_inflation=d_inflation,
         )
 
-    def downsample(self, x: SpatialTensor):
+    def forward(self, x: SpatialTensor):
         return self.conv(x)
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
@@ -238,20 +240,20 @@ class AdaptiveConvDownsample(AdaptiveDownsample):
                 state_dict[f'{prefix}conv.bias'] = bias
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-class AdaptiveUpsample(nn.Module):
+class AdaptiveInterpolationUpsample(nn.Module):
     def __init__(self, mode: InterpolateMode = InterpolateMode.TRILINEAR):
         super().__init__()
         self.mode = mode
 
     def upsample(self, x: SpatialTensor) -> SpatialTensor:
-        return nnf.interpolate(x, scale_factor=(2. if x.upsample_ready else 1., 2., 2.), mode=self.mode)
+        return nnf.interpolate(x, scale_factor=(2. if x.can_upsample_d else 1., 2., 2.), mode=self.mode)
 
     def forward(self, x: SpatialTensor):
         x = self.upsample(x)
         x.num_downsamples -= 1
         return x
 
-class AdaptiveUpsampleWithPostConv(AdaptiveUpsample):
+class AdaptiveInterpolationUpsampleWithPostConv(AdaptiveInterpolationUpsample):
     # following VQGAN's implementation
     def __init__(self, in_channels: int, out_channels: int | None = None, mode: InterpolateMode = InterpolateMode.NEAREST_EXACT):
         super().__init__(mode)
@@ -263,3 +265,46 @@ class AdaptiveUpsampleWithPostConv(AdaptiveUpsample):
         x = super().forward(x)
         x = self.conv(x)
         return x
+
+class InflatableTransposedConv3d(nn.ConvTranspose3d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for stride in self.stride:
+            assert stride & stride - 1 == 0, 'only support power of 2'
+        assert self.stride[1] == self.stride[2], 'only support stride_h == stride_w'
+        self.num_upsamples = self.stride[1].bit_length() - 1
+        assert self.kernel_size == self.stride
+        assert self.padding == (0, 0, 0)
+        assert self.output_padding == (0, 0, 0)
+        assert self.padding_mode == 'zeros'
+
+    def forward(self, x: SpatialTensor, output_size=None):
+        assert output_size is None
+        stride = list(self.stride)
+        stride[0] = min(1 << x.num_remained_d_upsamples, self.stride[0])
+        if stride[0] == self.stride[0]:
+            weight = self.weight
+        else:
+            weight = einops.reduce(
+                self.weight,
+                'co ci (dr dc) ... -> co ci dr ...',
+                'sum',
+                dr=stride[0],
+            )
+        x: SpatialTensor = nnf.conv_transpose3d(x, weight, self.bias, stride, self.padding, self.output_padding, self.groups, self.dilation)
+        x.num_downsamples -= self.num_upsamples
+        return x
+
+class AdaptiveTransposedConvUpsample(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, stride: int):
+        super().__init__()
+        self.transposed_conv = InflatableTransposedConv3d(in_channels, out_channels, kernel_size=stride, stride=stride)
+        self.conv = nn.Sequential(
+            InflatableConv3d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(8, out_channels),
+            nn.LeakyReLU(inplace=True),
+        )
+
+    def forward(self, x: SpatialTensor):
+        x = self.transposed_conv(x)
+        return self.conv(x)

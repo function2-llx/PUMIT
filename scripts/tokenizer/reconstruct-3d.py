@@ -38,7 +38,7 @@ def main():
     aniso_d = int(max(1, meta_tensor.pixdim[0] / min(meta_tensor.pixdim[1:]))).bit_length() - 1
     x = SpatialTensor(meta_tensor.as_tensor(), aniso_d)
     nib.save(nib.Nifti1Image(x[0].detach().float().cpu().numpy(), affine.numpy()), 'origin.nii.gz')
-    print(x.shape, x.aniso_d)
+    print(x.shape, x.num_pending_hw_downsamples)
     model = args.model.cuda().eval()
     load_ckpt(model, args.ckpt_path, state_dict_key='vqvae')
     with torch.no_grad():

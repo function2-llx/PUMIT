@@ -4,7 +4,6 @@ from copy import copy
 from pathlib import Path
 
 import cytoolz
-import einops
 from lightning import LightningModule
 from lightning.pytorch.cli import instantiate_class
 import numpy as np
@@ -15,20 +14,16 @@ from torch.utils.checkpoint import checkpoint
 from luolib.models.utils import create_param_groups, load_ckpt, split_weight_decay_keys
 from luolib.types import LRSchedulerConfig, tuple3_t
 from luolib.utils import DataKey
-from monai.config import PathLike
 
+from pumt import sac
+from .base import VQTokenizer
 from .loss import VQGANLoss
-from .quantize import VectorQuantizer, VectorQuantizerOutput
-from .base import VQTokenizerBase
-from ..conv import (
-    AdaptiveConvDownsample, AdaptiveInterpolationDownsample, AdaptiveUpsample, AdaptiveUpsampleWithPostConv,
-    InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d, SpatialTensor,
-)
+from .quantize import VectorQuantizer
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
 
-def act_layer(x: SpatialTensor):
+def act_layer(x: sac.SpatialTensor):
     # swish
     return x * torch.sigmoid(x)
 
@@ -48,26 +43,26 @@ class ResnetBlock(nn.Module):
         self.use_conv_shortcut = conv_shortcut
 
         self.norm1 = get_norm_layer(in_channels)
-        self.conv1 = InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv1 = sac.InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = get_norm_layer(out_channels)
         self.dropout = nn.Dropout(dropout)
-        self.conv2 = InflatableConv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = sac.InflatableConv3d(out_channels, out_channels, kernel_size=3, padding=1)
         if in_channels != out_channels:
             if self.use_conv_shortcut:
-                self.conv_shortcut = InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
+                self.conv_shortcut = sac.InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
             else:
-                self.nin_shortcut = InflatableConv3d(in_channels, out_channels, kernel_size=1)
+                self.nin_shortcut = sac.InflatableConv3d(in_channels, out_channels, kernel_size=1)
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if len(state_dict) == 0:
             # thank you,<s> USA </s>residual connection
             for name in ['conv1', 'conv2']:
-                conv: InflatableConv3d = getattr(self, name)
+                conv: sac.InflatableConv3d = getattr(self, name)
                 state_dict[f'{prefix}{name}.weight'] = torch.zeros_like(conv.weight)
                 state_dict[f'{prefix}{name}.bias'] = torch.zeros_like(conv.bias)
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def forward(self, x: SpatialTensor):
+    def forward(self, x: sac.SpatialTensor):
         h = x
         h = self.norm1(h)
         h = act_layer(h)
@@ -91,10 +86,10 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.norm = get_norm_layer(in_channels)
-        self.q = InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.k = InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.v = InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.proj_out = InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.q = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.k = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.v = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.proj_out = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor):
         h_ = x
@@ -143,13 +138,13 @@ class EncoderDownLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if downsample:
-            self.downsample = AdaptiveConvDownsample(out_channels, out_channels, (2, 3, 3))
+            self.downsample = sac.AdaptiveConvDownsample(out_channels, out_channels, (2, 3, 3))
         else:
             self.register_module('downsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: SpatialTensor):
+    def forward(self, x: sac.SpatialTensor):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -178,8 +173,8 @@ class Encoder(nn.Module):
         super().__init__()
         self.num_layers = len(layer_channels)
         attn_layer_ids = attn_layer_ids or []
-        self.conv_in = InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
-        self.additional_interpolation = AdaptiveInterpolationDownsample() if additional_interpolation else nn.Identity()
+        self.conv_in = sac.InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
+        self.additional_interpolation = sac.AdaptiveInterpolationDownsample() if additional_interpolation else nn.Identity()
         # downsampling
         self.down = nn.ModuleList([
             EncoderDownLayer(
@@ -206,9 +201,9 @@ class Encoder(nn.Module):
 
         # end
         self.norm_out = get_norm_layer(last_channels)
-        self.conv_out = InflatableConv3d(last_channels, z_channels, kernel_size=3, padding=1)
+        self.conv_out = sac.InflatableConv3d(last_channels, z_channels, kernel_size=3, padding=1)
 
-    def forward(self, x: SpatialTensor) -> SpatialTensor:
+    def forward(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         x = self.conv_in(x)
         x = self.additional_interpolation(x)
         for down in self.down:
@@ -241,13 +236,13 @@ class DecoderUpLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if upsample:
-            self.upsample = AdaptiveUpsampleWithPostConv(out_channels)
+            self.upsample = sac.AdaptiveInterpolationUpsampleWithPostConv(out_channels)
         else:
             self.register_module('upsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: SpatialTensor):
+    def forward(self, x: sac.SpatialTensor):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -279,7 +274,7 @@ class Decoder(nn.Module):
         last_channels = layer_channels[-1]
 
         # z to last feature map channels
-        self.conv_in = InflatableConv3d(z_channels, last_channels, kernel_size=3, padding=1)
+        self.conv_in = sac.InflatableConv3d(z_channels, last_channels, kernel_size=3, padding=1)
 
         # middle
         self.mid = nn.Sequential(OrderedDict(
@@ -303,12 +298,12 @@ class Decoder(nn.Module):
             )
             for i in range(num_layers)
         ])
-        self.additional_interpolation = AdaptiveUpsample() if additional_interpolation else nn.Identity()
+        self.additional_interpolation = sac.AdaptiveInterpolationUpsample() if additional_interpolation else nn.Identity()
 
         # end
         first_channels = layer_channels[0]
         self.norm_out = get_norm_layer(first_channels)
-        self.conv_out = InflatableOutputConv3d(first_channels, in_channels, kernel_size=3, padding=1)
+        self.conv_out = sac.InflatableOutputConv3d(first_channels, in_channels, kernel_size=3, padding=1)
 
     def forward(self, z: torch.Tensor):
         x = self.conv_in(z)
@@ -322,19 +317,19 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-class VQVAEModel(VQTokenizerBase):
+class VQVAEModel(VQTokenizer):
     def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict, pretrained_path: Path | None = None):
         super().__init__(vq_kwargs)
         self.encoder = Encoder(**ed_kwargs)
         self.decoder = Decoder(**ed_kwargs)
-        self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
+        self.quant_conv = sac.InflatableConv3d(z_channels, embedding_dim, 1)
         self.quantize = VectorQuantizer(**vq_kwargs)
-        self.post_quant_conv = InflatableConv3d(embedding_dim, z_channels, 1)
+        self.post_quant_conv = sac.InflatableConv3d(embedding_dim, z_channels, 1)
         if pretrained_path is not None:
             load_ckpt(self, pretrained_path, 'vqvae')
             self.is_pretrained = True
 
-    def encode(self, x: SpatialTensor) -> SpatialTensor:
+    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         x = self.encoder(x)
         return self.quant_conv(x)
 
@@ -347,6 +342,9 @@ class VQVAEModel(VQTokenizerBase):
     def stride(self) -> tuple3_t[int]:
         stride = 1 << self.encoder.num_layers + int(not isinstance(self.encoder.additional_interpolation, nn.Identity)) - 1
         return (stride, ) * 3
+
+    def get_ref_param(self) -> nn.Parameter | None:
+        return self.decoder.conv_out.weight
 
 class VQGAN(VQVAEModel, LightningModule):
     def __init__(

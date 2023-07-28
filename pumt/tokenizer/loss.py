@@ -5,7 +5,7 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from .discriminator import PatchDiscriminator
+from .discriminator import PatchDiscriminator, PatchDiscriminatorBase
 from .lpips import LPIPS
 from ..conv import SpatialTensor
 
@@ -36,15 +36,13 @@ class VQGANLoss(nn.Module):
     def __init__(
         self,
         quant_weight: float,
+        discriminator: PatchDiscriminatorBase,
         rec_loss: Literal['l1', 'l2'] = 'l1',
         rec_weight: float = 1.0,
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
         adaptive_gan_weight: bool = True,
-        disc_in_channels: int = 3,
-        disc_num_downsample_layers: int = 3,
-        disc_base_channels: int = 64,
     ):
         super().__init__()
         self.quant_weight = quant_weight
@@ -62,8 +60,8 @@ class VQGANLoss(nn.Module):
         self.max_perceptual_slices = max_perceptual_slices
         self.gan_weight = gan_weight
         self.adaptive_gan_weight = adaptive_gan_weight
-
-        self.discriminator = PatchDiscriminator(disc_in_channels, disc_num_downsample_layers, disc_base_channels)
+        assert discriminator is not None
+        self.discriminator = discriminator
         print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):

@@ -1,0 +1,39 @@
+model: model.yaml
+optimizer_g:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 5e-2
+lr_scheduler_g:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_in_epochs: false
+      lr_min: 1e-6
+      warmup_t: 25000
+      warmup_prefix: true
+  interval: step
+  frequency: 100
+loss: loss.yaml
+optimizer_d:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-3
+    weight_decay: 5e-2
+lr_scheduler_d:
+  scheduler:
+    class_path: timm.scheduler.CosineLRScheduler
+    init_args:
+      t_in_epochs: false
+      lr_min: 1e-6
+      warmup_t: 25000
+      warmup_prefix: true
+  interval: step
+  frequency: 100
+data: data.yaml
+training:
+  seed: 2333
+  max_steps: 500000
+  disc_loss_momentum: 0.9
+  use_gan_th: 0.025
+  output_dir: output/tokenizer-simple

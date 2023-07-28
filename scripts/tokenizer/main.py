@@ -17,7 +17,8 @@ from luolib.types import LRSchedulerConfig
 from pumt.conv import SpatialTensor
 from pumt.datamodule import PUMTDataModule
 from pumt.optim import build_optimizer, build_lr_scheduler
-from pumt.tokenizer import VQVAEModel, VQGANLoss
+from pumt.tokenizer import VQGANLoss
+from pumt.tokenizer.base import VQTokenizer
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -48,14 +49,15 @@ class TrainingArguments:
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
     output_dir: Path = Path('output/tokenizer')
-    disc_loss_ema_init: float = 1.
-    disc_loss_momentum: float = 0.85
-    use_gan_th: float = 0.15
+    disc_loss_ema_init: float = 0.1
+    disc_loss_momentum: float = 0.9
+    use_gan_th: float = 0.03
+    benchmark: bool = False
 
 def get_parser():
-    parser = ArgumentParser(parser_mode='omegaconf')
+    parser = ArgumentParser()
     parser.add_argument('-c', '--config', action=ActionConfigFile)
-    parser.add_subclass_arguments(VQVAEModel, 'vqvae')
+    parser.add_subclass_arguments(VQTokenizer, 'model')
     parser.add_argument('--optimizer_g', type=dict)
     parser.add_argument('--lr_scheduler_g', type=LRSchedulerConfig)
     parser.add_class_arguments(VQGANLoss, 'loss')
@@ -133,43 +135,47 @@ def main():
         parser.save(raw_args, save_dir / 'conf.yaml', multifile=False)
 
     # the shape of our data varies, but enabling this still seems to be faster
-    torch.backends.cudnn.benchmark = True
-    vqvae: VQVAEModel = args.vqvae
-    optimizer_g: Optimizer = build_optimizer(vqvae, args.optimizer_g)
+    torch.backends.cudnn.benchmark = training_args.benchmark
+    model: VQTokenizer = args.model
+    optimizer_g: Optimizer = build_optimizer(model, args.optimizer_g)
     lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
     loss_module: VQGANLoss = args.loss
     optimizer_d: Optimizer = build_optimizer(loss_module.discriminator, args.optimizer_d)
     lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
+    if fabric.is_global_zero:
+        Path(save_dir / 'model.txt').write_text(repr(model))
+        Path(save_dir / 'discriminator.txt').write_text(repr(loss_module.discriminator))
 
     optimized_steps = 0
     state = {
-        'vqvae': vqvae,
+        'model': model,
         'discriminator': loss_module.discriminator,
         'optimizer_g': optimizer_g,
         'optimizer_d': optimizer_d,
         'step': 0,
     }
     if training_args.resume_ckpt_path is None:
-        ckpt = torch.load(training_args.pretrained_ckpt_path, map_location='cpu')
-        if 'state_dict' in ckpt:
-            print(f'[rank {fabric.global_rank}] load discriminator')
-            load_ckpt(loss_module, ckpt, key_prefix='loss.')
-            ckpt['state_dict'] = {
-                k: v
-                for k, v in ckpt['state_dict'].items() if not k.startswith('loss.')
-            }
-            print(f'[rank {fabric.global_rank}] load vqvae')
-            load_ckpt(vqvae, ckpt)
-        else:
-            vqvae.load_state_dict(ckpt['vqvae'])
-            loss_module.discriminator.load_state_dict(ckpt['discriminator'])
+        if training_args.pretrained_ckpt_path is not None:
+            ckpt = torch.load(training_args.pretrained_ckpt_path, map_location='cpu')
+            if 'state_dict' in ckpt:
+                print(f'[rank {fabric.global_rank}] load discriminator')
+                load_ckpt(loss_module, ckpt, key_prefix='loss.')
+                ckpt['state_dict'] = {
+                    k: v
+                    for k, v in ckpt['state_dict'].items() if not k.startswith('loss.')
+                }
+                print(f'[rank {fabric.global_rank}] load tokenizer')
+                load_ckpt(model, ckpt)
+            else:
+                model.load_state_dict(ckpt['model'])
+                loss_module.discriminator.load_state_dict(ckpt['discriminator'])
     else:
         fabric.load(training_args.resume_ckpt_path, state)
         print(f'resumed from {training_args.resume_ckpt_path}')
         optimized_steps = state['step']
 
     # setup model and optimizer after checkpoint loading, or optimizer.param_groups[i] will be different object
-    vqvae, optimizer_g = fabric.setup(vqvae, optimizer_g)
+    model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
     datamodule: PUMTDataModule = args.data
@@ -188,15 +194,17 @@ def main():
     ):
         x = 2 * x - 1
         x = SpatialTensor(x, aniso_d)
-        vqvae.quantize.adjust_temperature(step, training_args.max_steps)
-        x_rec, quant_out = vqvae(x)
+        model.quantize.adjust_temperature(step, training_args.max_steps)
+        x_rec, quant_out = model(x)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
-            x, x_rec, quant_out.loss, max(disc_loss_ema, disc_loss_item) <= training_args.use_gan_th, vqvae.decoder.conv_out.weight, fabric
+            x, x_rec, quant_out.loss,
+            max(disc_loss_ema, disc_loss_item) <= training_args.use_gan_th, model.get_ref_param(),
+            fabric,
         )
         fabric.backward(loss)
         if training_args.max_norm_g is not None:
-            fabric.clip_gradients(vqvae, optimizer_g, max_norm=training_args.max_norm_g)
+            fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
             lr_scheduler_g.scheduler.step_update(step)
             fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)

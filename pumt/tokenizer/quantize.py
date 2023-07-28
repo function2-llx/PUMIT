@@ -9,12 +9,12 @@ from torch.nn import functional as nnf
 
 from luolib.utils import channel_first, channel_last
 
-from pumt.conv import SpatialTensor
+from pumt import sac
 
 @dataclass
 class VectorQuantizerOutput:
-    z_q: SpatialTensor
-    index: SpatialTensor
+    z_q: sac.SpatialTensor
+    index: sac.SpatialTensor
     loss: torch.Tensor
     probs: torch.Tensor | None = None
 
@@ -25,18 +25,21 @@ class VectorQuantizer(nn.Module):
         num_embeddings: int,
         embedding_dim: int,
         mode: Literal['nearest', 'gumbel', 'soft'],
+        in_channels: int | None = None,
         hard_gumbel: bool = True,
         beta: float = 0.25,
     ):
         super().__init__()
         self.mode = mode
         self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        in_channels = in_channels or embedding_dim
         if mode == 'nearest':
             self.beta = beta
             self.register_module('proj', None)
         else:
             # calculate categorical distribution over embeddings
-            self.proj = nn.Linear(embedding_dim, num_embeddings)
+            self.proj = nn.Linear(in_channels, num_embeddings)
             if mode == 'gumbel':
                 self.hard_gumbel = hard_gumbel
                 self.temperature = 1.
