@@ -1,9 +1,9 @@
-quant_weight: 1e-7
+quant_weight: 5e-6
 discriminator:
   class_path: pumt.tokenizer.discriminator.SimplePatchDiscriminator
   init_args:
     in_channels: 3
     layer_channels: [128, 256, 512]
-gan_weight: 1e-3
+gan_weight: 3e-3
 adaptive_gan_weight: false
 max_perceptual_slices: 24
