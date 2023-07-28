@@ -16,7 +16,7 @@ dataset_weights:
   RSNA-2020-PED: 0.3
   PI-CAI: 0.25
 dl_conf:
-  train_batch_size: 8
+  train_batch_size: 4
 trans_conf:
   train_tz: 3
   train_tx: 14

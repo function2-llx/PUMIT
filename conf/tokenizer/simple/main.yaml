@@ -38,3 +38,4 @@ training:
   disc_loss_momentum: 0.9
   use_gan_th: 0.025
   output_dir: output/tokenizer-simple
+  plot_image_every_n_steps: 500
