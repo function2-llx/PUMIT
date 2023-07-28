@@ -1,7 +1,7 @@
 model: model.yaml
 data: data.yaml
 trainer:
-  max_steps: 500000
+  max_steps: 200000
   precision: 16-mixed
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
@@ -14,4 +14,14 @@ trainer:
   log_every_n_steps: 10
   benchmark: true
   use_distributed_sampler: false
+  callbacks:
+  - lightning.pytorch.callbacks.LearningRateMonitor
+  - class_path: lightning.pytorch.callbacks.ModelSummary
+    init_args:
+      max_depth: 2
+  - class_path: __main__.ModelCheckpoint
+    init_args:
+      every_n_train_steps: 10000
+      save_top_k: -1
+      verbose: false
 seed_everything: 666

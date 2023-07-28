@@ -1,5 +1,3 @@
-import warnings
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -9,14 +7,14 @@ import torch
 from torch import nn
 from torch.nn import functional as nnf
 
-from pumt.conv import InflatableConv3d
-from luolib.utils import channel_last, channel_first
-from monai.config import PathLike
+from luolib.utils import channel_first, channel_last
+
+from pumt.conv import SpatialTensor
 
 @dataclass
 class VectorQuantizerOutput:
-    z_q: torch.Tensor
-    index: torch.Tensor
+    z_q: SpatialTensor
+    index: SpatialTensor
     loss: torch.Tensor
     probs: torch.Tensor | None = None
 

@@ -17,15 +17,18 @@ from pumt.conv import InflatableConv3d, SpatialTensor
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = True):
+    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = True, as_tensor: bool = True):
         super().__init__()
         self.patch_size = ensure_tuple_rep(patch_size, 3)
         self.proj = InflatableConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
         self.flatten = flatten
+        self.as_tensor = as_tensor
 
     def forward(self, x: SpatialTensor, flatten: bool | None = None) -> torch.Tensor:
         flatten = self.flatten if flatten is None else flatten
-        x = self.proj(x).as_tensor()
+        x = self.proj(x)
+        if self.as_tensor:
+            x = x.as_tensor()
         if flatten:
             x = einops.rearrange(x, 'n c ... -> n (...) c')
         return x

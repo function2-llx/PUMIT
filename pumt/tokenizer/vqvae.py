@@ -2,29 +2,27 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from copy import copy
 from pathlib import Path
-from typing import Self
 
 import cytoolz
 import einops
-import numpy as np
 from lightning import LightningModule
 from lightning.pytorch.cli import instantiate_class
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from luolib.models.utils import split_weight_decay_keys, load_ckpt, create_param_groups
-from luolib.utils import DataKey
+from luolib.models.utils import create_param_groups, load_ckpt, split_weight_decay_keys
 from luolib.types import LRSchedulerConfig, tuple3_t
+from luolib.utils import DataKey
 from monai.config import PathLike
 
 from .loss import VQGANLoss
 from .quantize import VectorQuantizer, VectorQuantizerOutput
+from .base import VQTokenizerBase
 from ..conv import (
-    AdaptiveConvDownsample, AdaptiveUpsampleWithPostConv, AdaptiveInterpolationDownsample, AdaptiveUpsample, InflatableConv3d,
-    InflatableInputConv3d,
-    InflatableOutputConv3d,
-    SpatialTensor,
+    AdaptiveConvDownsample, AdaptiveInterpolationDownsample, AdaptiveUpsample, AdaptiveUpsampleWithPostConv,
+    InflatableConv3d, InflatableInputConv3d, InflatableOutputConv3d, SpatialTensor,
 )
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
@@ -324,11 +322,9 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-class VQVAEModel(nn.Module):
-    is_pretrained: bool = False
-
+class VQVAEModel(VQTokenizerBase):
     def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict, pretrained_path: Path | None = None):
-        super().__init__()
+        super().__init__(vq_kwargs)
         self.encoder = Encoder(**ed_kwargs)
         self.decoder = Decoder(**ed_kwargs)
         self.quant_conv = InflatableConv3d(z_channels, embedding_dim, 1)
@@ -338,48 +334,19 @@ class VQVAEModel(nn.Module):
             load_ckpt(self, pretrained_path, 'vqvae')
             self.is_pretrained = True
 
-    def do_quantize(self, z: SpatialTensor) -> VectorQuantizerOutput:
-        z = self.quant_conv(z)
-        quant_out: VectorQuantizerOutput = self.quantize(z)
-        return quant_out
+    def encode(self, x: SpatialTensor) -> SpatialTensor:
+        x = self.encoder(x)
+        return self.quant_conv(x)
 
     def decode(self, z_q: torch.Tensor):
         z = self.post_quant_conv(z_q)
         x_rec = self.decoder(z)
         return x_rec
 
-    def forward(self, x: SpatialTensor) -> tuple[torch.Tensor, VectorQuantizerOutput]:
-        z = self.encoder(x)
-        quant_out = self.do_quantize(z)
-        x_rec = self.decode(quant_out.z_q)
-        return x_rec, quant_out
-
     @property
     def stride(self) -> tuple3_t[int]:
         stride = 1 << self.encoder.num_layers + int(not isinstance(self.encoder.additional_interpolation, nn.Identity)) - 1
         return (stride, ) * 3
-
-    @property
-    def codebook_size(self):
-        return self.quantize.num_embeddings
-
-    def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
-        if self.is_pretrained:
-            # make pytorch happy
-            state_dict.update(self.state_dict(prefix=prefix))
-        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
-
-    def tokenize(self, x: SpatialTensor, flatten: bool = True):
-        z = self.encoder(x)
-        quant_out = self.do_quantize(z)
-        index = quant_out.index
-        if flatten:
-            index = einops.rearrange(index, 'n ... d -> n (...) d').as_tensor()
-        return index
-
-    def load_pretrained(self, path: PathLike):
-        load_ckpt(self, path, 'vqvae')
-        self.is_pretrained = True
 
 class VQGAN(VQVAEModel, LightningModule):
     def __init__(

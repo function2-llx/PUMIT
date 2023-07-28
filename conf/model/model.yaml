@@ -19,7 +19,7 @@ init_args:
       init_args:
         t_in_epochs: false
         lr_min: 1e-6
-        warmup_t: 20000
+        warmup_t: 10000
         warmup_prefix: true
     interval: step
-    frequency: 500
+    frequency: 200
