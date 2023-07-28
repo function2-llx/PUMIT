@@ -46,6 +46,7 @@ data:
     train_tx: 8
     train_scale_x: [0.75, 2.0]
 training:
+  exp_name: tokenizer
   max_steps: 300000
   pretrained_ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
   disc_loss_momentum: 0.85

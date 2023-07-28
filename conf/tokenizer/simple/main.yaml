@@ -32,6 +32,7 @@ lr_scheduler_d:
   frequency: 100
 data: data.yaml
 training:
+  exp_name: tokenizer-simple
   seed: 2333
   max_steps: 500000
   disc_loss_momentum: 0.9

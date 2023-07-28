@@ -5,9 +5,9 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from .discriminator import PatchDiscriminator, PatchDiscriminatorBase
+from pumt import sac
+from .discriminator import PatchDiscriminatorBase
 from .lpips import LPIPS
-from ..conv import SpatialTensor
 
 @torch.no_grad()
 def calculate_adaptive_weight(
@@ -88,8 +88,8 @@ class VQGANLoss(nn.Module):
 
     def forward_gen(
         self,
-        x: SpatialTensor,
-        x_rec: SpatialTensor,
+        x: sac.SpatialTensor,
+        x_rec: sac.SpatialTensor,
         quant_loss: torch.Tensor,
         use_gan_loss: bool,
         ref_param: nn.Parameter | None = None,
@@ -139,7 +139,7 @@ class VQGANLoss(nn.Module):
             'gan_weight': gan_weight,
         }
 
-    def forward_disc(self, x: SpatialTensor, x_rec: SpatialTensor, log_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict]:
+    def forward_disc(self, x: sac.SpatialTensor, x_rec: sac.SpatialTensor, log_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict]:
         score_real = self.discriminator(x.detach())
         score_fake = self.discriminator(x_rec.detach())
         disc_loss = 0.5 * hinge_loss(score_real, score_fake)

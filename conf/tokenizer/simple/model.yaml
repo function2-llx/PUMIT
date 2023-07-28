@@ -7,4 +7,4 @@ init_args:
   in_channels: 3
   start_stride: 4
   downsample_layer_channels: [128, 256, 512]
-  upsample_layer_channels: [512, 256, 128]
+  upsample_layer_channels: [128, 256, 512]

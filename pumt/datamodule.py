@@ -189,7 +189,7 @@ class PUMTDataModule(LightningDataModule):
         trans_conf = self.trans_conf
         return mt.Compose(
             [
-                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader(2 * trans_conf.train_tz * trans_conf.stride), image_only=True),
+                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)), image_only=True),
                 UpdateSpacingD(),
                 RandAffineCropD(trans_conf.rotate_p),
                 *[

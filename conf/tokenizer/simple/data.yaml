@@ -18,6 +18,6 @@ dataset_weights:
 dl_conf:
   train_batch_size: 8
 trans_conf:
-  train_tz: 5
+  train_tz: 3
   train_tx: 14
   train_scale_x: [0.75, 2.0]

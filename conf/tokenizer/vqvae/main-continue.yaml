@@ -35,6 +35,7 @@ lr_scheduler_d:
   frequency: 100
 data: data.yaml
 training:
+  exp_name: tokenizer-continue
   seed: 233
   max_steps: 200000
   pretrained_ckpt_path: output/tokenizer/run-20230721_062106-3eyg9bv7/checkpoints/step=300000.ckpt

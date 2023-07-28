@@ -1,11 +1,11 @@
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import cast
 
 from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as LightningFabric
 from lightning.pytorch.loggers import WandbLogger
-import math
 import torch
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
@@ -14,11 +14,11 @@ from tqdm import tqdm
 
 from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
-from pumt.conv import SpatialTensor
+
+from pumt import sac
 from pumt.datamodule import PUMTDataModule
 from pumt.optim import build_optimizer, build_lr_scheduler
-from pumt.tokenizer import VQGANLoss
-from pumt.tokenizer.base import VQTokenizer
+from pumt.tokenizer import VQGANLoss, VQTokenizer
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -49,6 +49,7 @@ class TrainingArguments:
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
     output_dir: Path = Path('output/tokenizer')
+    exp_name: str
     disc_loss_ema_init: float = 0.1
     disc_loss_momentum: float = 0.9
     use_gan_th: float = 0.03
@@ -121,7 +122,7 @@ def main():
     args = parser.instantiate_classes(raw_args)
     training_args: TrainingArguments = args.training
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
-    logger = WandbLogger('tokenizer', training_args.output_dir, project='PUMT')
+    logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='PUMT')
     fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
     fabric.launch()
@@ -193,7 +194,7 @@ def main():
         start=optimized_steps,
     ):
         x = 2 * x - 1
-        x = SpatialTensor(x, aniso_d)
+        x = sac.SpatialTensor(x, aniso_d)
         model.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, quant_out = model(x)
         loss_module.discriminator.requires_grad_(False)
