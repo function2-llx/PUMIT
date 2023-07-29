@@ -318,16 +318,12 @@ class Decoder(nn.Module):
         return x
 
 class VQVAEModel(VQTokenizer):
-    def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, vq_kwargs: dict, pretrained_path: Path | None = None):
-        super().__init__(vq_kwargs)
+    def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.encoder = Encoder(**ed_kwargs)
         self.decoder = Decoder(**ed_kwargs)
         self.quant_conv = sac.InflatableConv3d(z_channels, embedding_dim, 1)
-        self.quantize = VectorQuantizer(**vq_kwargs)
         self.post_quant_conv = sac.InflatableConv3d(embedding_dim, z_channels, 1)
-        if pretrained_path is not None:
-            load_ckpt(self, pretrained_path, 'vqvae')
-            self.is_pretrained = True
 
     def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         x = self.encoder(x)

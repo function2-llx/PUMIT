@@ -12,18 +12,18 @@ from xformers import ops as xops
 from luolib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
-from pumt.conv import InflatableInputConv3d, SpatialTensor
+from pumt import sac
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
     def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = True, as_tensor: bool = True):
         super().__init__()
         self.patch_size: tuple3_t[int] = ensure_tuple_rep(patch_size, 3)
-        self.proj = InflatableInputConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = sac.InflatableInputConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
         self.flatten = flatten
         self.as_tensor = as_tensor
 
-    def forward(self, x: SpatialTensor, flatten: bool | None = None) -> torch.Tensor:
+    def forward(self, x: sac.SpatialTensor, flatten: bool | None = None) -> torch.Tensor:
         flatten = self.flatten if flatten is None else flatten
         x = self.proj(x)
         if self.as_tensor:
@@ -215,7 +215,7 @@ class ViT(nn.Module):
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
 
-    def prepare_seq_input(self, x: SpatialTensor):
+    def prepare_seq_input(self, x: sac.SpatialTensor):
         x = self.patch_embed(x)
         shape = x.shape[2:]
         x += resample(self.pos_embed, shape)
@@ -229,7 +229,7 @@ class ViT(nn.Module):
         )
         return x, shape
 
-    def forward(self, x: SpatialTensor):
+    def forward(self, x: sac.SpatialTensor):
         x, shape = self.prepare_seq_input(x)
         self.rope.prepare(shape)
         for block in self.blocks:

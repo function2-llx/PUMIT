@@ -61,9 +61,9 @@ class VectorQuantizer(nn.Module):
             # convert 1x1 conv2d weight (from VQGAN with Gumbel softmax) to linear
             if weight.ndim == 4 and weight.shape[2:] == (1, 1):
                 state_dict[proj_weight_key] = weight.squeeze()
-        elif self.mode != 'nearest':
+        elif self.mode != 'nearest' and (weight := state_dict.get(f'{prefix}embedding.weight')) is not None:
             # dot product as logit
-            state_dict[proj_weight_key] = einops.rearrange(state_dict[f'{prefix}embedding.weight'], 'ne d -> ne d 1 1 1')
+            state_dict[proj_weight_key] = einops.rearrange(weight, 'ne d -> ne d 1 1 1')
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, z: torch.Tensor):

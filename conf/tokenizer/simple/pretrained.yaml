@@ -1,0 +1,4 @@
+class_path: pumt.tokenizer.from_pretrained
+init_args:
+  model: model.yaml
+  path: output/tokenizer-simple/run-20230729_071247-tudoi64b/checkpoints/step=80000.ckpt

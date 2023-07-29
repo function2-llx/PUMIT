@@ -4,7 +4,6 @@ from pathlib import Path
 import einops
 from lightning import LightningModule
 from lightning.pytorch.loggers import WandbLogger
-import mmcv
 from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 import torch
 from torch import nn
@@ -12,9 +11,10 @@ from torch.utils import checkpoint
 
 from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
-from pumt.conv import SpatialTensor
+
+from pumt import sac
 from pumt.optim import build_lr_scheduler, build_optimizer
-from pumt.tokenizer import VQVAEModel
+from pumt.tokenizer import VQTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):
@@ -22,7 +22,7 @@ class ViTForMIM(ViT, LightningModule):
     def __init__(
         self,
         *args,
-        tokenizer: VQVAEModel,
+        tokenizer: VQTokenizer,
         mask_ratio: float,
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
@@ -56,7 +56,7 @@ class ViTForMIM(ViT, LightningModule):
         logger: WandbLogger = self.logger
         return Path(logger.save_dir) / Path(logger.experiment.dir).parent.name
 
-    def forward(self, x: SpatialTensor, visible_idx: torch.Tensor | None = None):
+    def forward(self, x: sac.SpatialTensor, visible_idx: torch.Tensor | None = None):
         if visible_idx is None:
             return super().forward(x)
         x, spatial_shape = self.prepare_seq_input(x)
@@ -100,15 +100,13 @@ class ViTForMIM(ViT, LightningModule):
         scheduler.step_update(0)
 
     def training_step(self, batch: tuple[torch.Tensor, int, Path], *args, **kwargs):
-        x = SpatialTensor(*batch[:2])
-        with mmcv.Timer(print_tmpl='tokenize: {:.3f}'):
-            token_ids = self.tokenizer.tokenize(x)
+        x = sac.SpatialTensor(*batch[:2])
+        token_ids = self.tokenizer.tokenize(x)
         batch_size, seq_len = token_ids.shape[:2]
         num_visible_patches = int(seq_len * (1 - self.mask_ratio))
         visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
-        with mmcv.Timer(print_tmpl='transformer forward: {:.3f}'):
-            hidden_states = self(x, visible_idx)[:, 1:]
-            masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
+        hidden_states = self(x, visible_idx)[:, 1:]
+        masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         token_probs = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)

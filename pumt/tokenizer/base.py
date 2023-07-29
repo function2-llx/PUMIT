@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import einops
+from jsonargparse import class_from_function
 import torch
 from torch import nn
 
+from luolib.models import load_ckpt
 from luolib.types import tuple3_t
 
 from pumt import sac
@@ -56,3 +61,13 @@ class VQTokenizer(ABC, nn.Module):
 
     def get_ref_param(self) -> nn.Parameter | None:
         return None
+
+    @classmethod
+    def from_pretrained(cls, model: VQTokenizer, path: Path) -> VQTokenizer:
+        # not annotated as Self here for the recognition of jsonargparse
+        load_ckpt(model, path)
+        model.is_pretrained = True
+        return model
+
+# https://github.com/omni-us/jsonargparse/issues/309
+from_pretrained = class_from_function(VQTokenizer.from_pretrained)

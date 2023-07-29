@@ -1,4 +1,0 @@
-model:
-#  class_path: pumt.model.ViTForMIM
-  init_args:
-    mask_layer_ids: [5, 9, 11]
