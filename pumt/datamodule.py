@@ -185,7 +185,9 @@ class PUMTDataModule(LightningDataModule):
                     self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
-        self.device = None if device is None else torch.device(device)
+        if device is None:
+            device = 'cpu'
+        self.device = torch.device(device)
 
     def setup_ddp(self, rank: int, world_size: int):
         self.rank = rank
@@ -199,7 +201,11 @@ class PUMTDataModule(LightningDataModule):
         trans_conf = self.trans_conf
         return mt.Compose(
             [
-                lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)), image_only=True),
+                lt.RandomizableLoadImageD(
+                    DataKey.IMG,
+                    PUMTReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
+                    image_only=True,
+                ),
                 mt.ToDeviceD(DataKey.IMG, self.device),
                 UpdateSpacingD(),
                 RandAffineCropD(trans_conf.rotate_p),
