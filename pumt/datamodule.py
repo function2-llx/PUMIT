@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import torch
+from torch.types import Device
 from torch.utils.data import Dataset as TorchDataset, Sampler
 
 from luolib import transforms as lt
@@ -150,6 +151,7 @@ class PUMTDataModule(LightningDataModule):
         dl_conf: DataLoaderConf,
         trans_conf: TransformConf,
         seed: int | None = 42,
+        device: Device = None,
     ):
         super().__init__()
         self.train_data = pd.DataFrame()
@@ -183,6 +185,7 @@ class PUMTDataModule(LightningDataModule):
                     self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
+        self.device = device
 
     def setup_ddp(self, rank: int, world_size: int):
         self.rank = rank
@@ -197,6 +200,7 @@ class PUMTDataModule(LightningDataModule):
         return mt.Compose(
             [
                 lt.RandomizableLoadImageD(DataKey.IMG, PUMTReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)), image_only=True),
+                mt.ToDeviceD(DataKey.IMG, self.device),
                 UpdateSpacingD(),
                 RandAffineCropD(trans_conf.rotate_p),
                 *[
