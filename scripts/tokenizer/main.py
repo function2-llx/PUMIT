@@ -180,7 +180,7 @@ def main():
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
     datamodule: PUMTDataModule = args.data
-    datamodule.setup_ddp(fabric.global_rank, fabric.world_size)
+    datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(optimized_steps),
         datamodule.val_dataloader(),

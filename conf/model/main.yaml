@@ -24,4 +24,10 @@ trainer:
       every_n_train_steps: 10000
       save_top_k: -1
       verbose: false
+  - class_path: __main__.ModelCheckpoint
+    init_args:
+      every_n_train_steps: 1000
+      save_last: true
+      save_top_k: 0
+      verbose: false
 seed_everything: 666

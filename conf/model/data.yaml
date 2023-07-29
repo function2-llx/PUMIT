@@ -18,7 +18,7 @@ init_args:
     RSNA-2020-PED: 0.3
     PI-CAI: 0.25
   dl_conf:
-    train_batch_size: 16
+    train_batch_size: 8
   trans_conf:
     train_tz: 8
     train_tx: 16

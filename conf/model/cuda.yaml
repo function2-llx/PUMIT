@@ -1,0 +1,4 @@
+init_args:
+  device: cuda
+  dl_conf:
+    num_workers: 4

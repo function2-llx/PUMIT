@@ -37,8 +37,8 @@ class CLI(LightningCLI):
             Path(save_dir).mkdir(exist_ok=True, parents=True)
 
 def main():
-    torch.autograd.set_detect_anomaly(True)
     torch.set_float32_matmul_precision('high')
+    torch.multiprocessing.set_start_method('spawn', force=True)
     CLI(save_config_callback=SaveConfigCallback)
 
 if __name__ == "__main__":

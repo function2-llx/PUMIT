@@ -109,7 +109,7 @@ class ViTForMIM(ViT, LightningModule):
         # https://github.com/Lightning-AI/lightning/issues/17972
         scheduler.step_update(0)
 
-    def training_step(self, batch: tuple[torch.Tensor, int, Path], *args, **kwargs):
+    def training_step(self, batch: tuple[torch.Tensor, int, Path], batch_idx: int, *args, **kwargs):
         x = sac.SpatialTensor(*batch[:2])
         token_ids = self.tokenizer.tokenize(x)
         batch_size, seq_len = token_ids.shape[:2]

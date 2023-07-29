@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from lightning import LightningDataModule
 import numpy as np
@@ -151,7 +152,7 @@ class PUMTDataModule(LightningDataModule):
         dl_conf: DataLoaderConf,
         trans_conf: TransformConf,
         seed: int | None = 42,
-        device: Device = None,
+        device: Literal['cpu', 'cuda'] = 'cpu',
     ):
         super().__init__()
         self.train_data = pd.DataFrame()
@@ -185,16 +186,17 @@ class PUMTDataModule(LightningDataModule):
                     self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
-        if device is None:
-            device = 'cpu'
         self.device = torch.device(device)
 
-    def setup_ddp(self, rank: int, world_size: int):
-        self.rank = rank
+    def setup_ddp(self, local_rank: int, global_rank: int, world_size: int):
+        self.local_rank = local_rank
+        self.global_rank = global_rank
         self.world_size = world_size
+        if self.device.type == 'cuda':
+            self.device = torch.device(local_rank)
 
     def setup(self, stage: str) -> None:
-        self.setup_ddp(self.trainer.global_rank, self.trainer.world_size)
+        self.setup_ddp(self.trainer.local_rank, self.trainer.global_rank, self.trainer.world_size)
 
     def train_transform(self) -> Callable:
         # TODO: also enable skipping the transform deterministically?
@@ -241,7 +243,7 @@ class PUMTDataModule(LightningDataModule):
             conf.num_workers,
             batch_sampler=PUMTDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
-                self.world_size, self.rank, self.R, conf.train_batch_size, weight,
+                self.world_size, self.global_rank, self.R, conf.train_batch_size, weight,
             ),
             prefetch_factor=8 if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,

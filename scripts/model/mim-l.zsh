@@ -8,4 +8,5 @@ python scripts/model/main.py fit \
     --model conf/model/mim-l.yaml \
     --model.eva02_pretrained_path pre-trained/eva02_L_pt_m38m_p14.pt \
     --model.tokenizer conf/tokenizer/simple/pretrained.yaml \
+    --data conf/model/cuda.yaml \
     $@
