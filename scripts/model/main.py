@@ -12,7 +12,7 @@ class SaveConfigCallback(LightningSaveConfigCallback):
     @rank_zero_only
     def setup(self, trainer: Trainer, model: ViTForMIM, **kwargs):
         assert not self.already_saved
-        save_dir = model.run_dir / 'conf'
+        save_dir = model.run_dir
         save_dir.mkdir(parents=True, exist_ok=True)
         save_path = save_dir / 'conf.yaml'
         # https://github.com/omni-us/jsonargparse/issues/332

@@ -184,6 +184,13 @@ class PUMTDataModule(LightningDataModule):
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
 
+    def setup_ddp(self, rank: int, world_size: int):
+        self.rank = rank
+        self.world_size = world_size
+
+    def setup(self, stage: str) -> None:
+        self.setup_ddp(self.trainer.global_rank, self.trainer.world_size)
+
     def train_transform(self) -> Callable:
         # TODO: also enable skipping the transform deterministically?
         trans_conf = self.trans_conf
@@ -215,7 +222,7 @@ class PUMTDataModule(LightningDataModule):
         assert (np.array(aniso_d_list) == aniso_d).all()
         return torch.stack(tensor_list), aniso_d, paths
 
-    def train_dataloader(self, world_size: int = 1, rank: int = 0, num_skip_batches: int = 0):
+    def train_dataloader(self, num_skip_batches: int = 0):
         conf = self.dl_conf
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
@@ -224,7 +231,7 @@ class PUMTDataModule(LightningDataModule):
             conf.num_workers,
             batch_sampler=PUMTDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
-                world_size, rank, self.R, conf.train_batch_size, weight,
+                self.world_size, self.rank, self.R, conf.train_batch_size, weight,
             ),
             prefetch_factor=8 if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,

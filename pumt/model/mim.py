@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path
 
 import einops
@@ -51,10 +52,15 @@ class ViTForMIM(ViT, LightningModule):
             if k.startswith('tokenizer.')
         }
 
-    @property
-    def run_dir(self):
+    @cached_property
+    def run_dir(self) -> Path:
         logger: WandbLogger = self.logger
-        return Path(logger.save_dir) / Path(logger.experiment.dir).parent.name
+        if self.trainer.is_global_zero:
+            run_dir = Path(logger.save_dir) / Path(logger.experiment.dir).parent.name
+        else:
+            run_dir = None
+        run_dir = self.trainer.strategy.broadcast(run_dir)
+        return run_dir
 
     def forward(self, x: sac.SpatialTensor, visible_idx: torch.Tensor | None = None):
         if visible_idx is None:
@@ -90,6 +96,10 @@ class ViTForMIM(ViT, LightningModule):
             'optimizer': (optimizer := build_optimizer(self, self.optimizer)),
             'lr_scheduler': vars(build_lr_scheduler(optimizer, self.lr_scheduler, self.trainer.max_steps)),
         }
+
+    def on_fit_start(self) -> None:
+        if self.trainer.is_global_zero:
+            (self.run_dir / 'model.txt').write_text(repr(self))
 
     def lr_scheduler_step(self, scheduler: TIMMScheduler, metric=None):
         scheduler.step_update(self.global_step + 1, metric)

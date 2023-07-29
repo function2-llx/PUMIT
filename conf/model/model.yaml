@@ -18,4 +18,4 @@ init_args:
         warmup_t: 10000
         warmup_prefix: true
     interval: step
-    frequency: 200
+    frequency: 100
