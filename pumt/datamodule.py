@@ -185,7 +185,7 @@ class PUMTDataModule(LightningDataModule):
                     self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
-        self.device = device
+        self.device = None if device is None else torch.device(device)
 
     def setup_ddp(self, rank: int, world_size: int):
         self.rank = rank
@@ -239,7 +239,7 @@ class PUMTDataModule(LightningDataModule):
             ),
             prefetch_factor=8 if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,
-            pin_memory=True,
+            pin_memory=self.device.type == 'cpu',
             persistent_workers=conf.num_workers > 0,
         )
 
