@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from pathlib import Path
 
 import einops
 import numpy as np
@@ -9,6 +10,7 @@ from torch.nn import functional as nnf
 from torch.utils import checkpoint
 from xformers import ops as xops
 
+from luolib.models import load_ckpt
 from luolib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
@@ -183,6 +185,7 @@ class ViT(nn.Module):
         drop_path_rate: float = 0.,
         grad_ckpt: bool = False,
         patch_embed_grad_scale: float = 1.,
+        eva02_pretrained_path: Path | None = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -214,6 +217,8 @@ class ViT(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
+        if eva02_pretrained_path is not None:
+            load_ckpt(self, eva02_pretrained_path, 'module')
 
     def prepare_seq_input(self, x: sac.SpatialTensor):
         x = self.patch_embed(x)
