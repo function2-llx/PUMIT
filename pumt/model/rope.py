@@ -23,24 +23,26 @@ class SpatialRotaryEmbedding(nn.Module):
     def __init__(self,
         dim: int,
         rescale_shape: tuple3_t[int] = (8, 16, 16),
-        base: tuple3_t[float] = (23333, 10000, 10000),
+        base: tuple3_t[float] = (233, 10000, 10000),
         merge_hw: bool = True,
     ):
         super().__init__()
-        assert dim & 1 == 0
         self.dim = dim
         self.rescale_shape = rescale_shape
         self.merge_hw = merge_hw
         if merge_hw:
             # compatible with EVA-02
-            dim = [dim, dim >> 1, dim >> 1]
+            assert dim & 3 == 0
+            dim >>= 1
         else:
-            dim = [dim, dim, dim]
+            assert dim & 1 == 0
         for i in range(3):
             if merge_hw and i > 0:
-                exp = -torch.arange(0, dim[i], 2) / dim[i]
+                exp = -torch.arange(0, dim, 2) / dim
             else:
-                exp = -torch.arange(2, dim[i] + 2, 2) / (dim[i] + 2)
+                exp = -torch.arange(2, dim + 2, 2) / dim
+                if i == 0:
+                    exp = einops.repeat(exp, '... -> (r ...)', r=2)
             self.register_buffer(f'ω{i}', torch.pow(base[i], exp), False)
         self.reset()
 
