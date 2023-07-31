@@ -1,0 +1,4 @@
+class_path: pumt.model.SimpleViTAdapter
+init_args:
+  adaptive_patch_embed: false
+  out_indexes: [7, 11, 15, 23]

@@ -18,13 +18,15 @@ from pumt import sac
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, flatten: bool = True, as_tensor: bool = True):
+    def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, adaptive: bool = True, flatten: bool = True):
         super().__init__()
         self.patch_size: tuple3_t[int] = ensure_tuple_rep(patch_size, 3)
-        self.proj = sac.InflatableInputConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, as_tensor=as_tensor)
+        self.adaptive = adaptive
+        conv_t = sac.InflatableInputConv3d if adaptive else nn.Conv3d
+        self.proj = conv_t(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
         self.flatten = flatten
 
-    def forward(self, x: sac.SpatialTensor, flatten: bool | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, flatten: bool | None = None) -> torch.Tensor:
         flatten = self.flatten if flatten is None else flatten
         x = self.proj(x)
         if flatten:
@@ -164,12 +166,13 @@ def resample(x: torch.Tensor, shape: tuple3_t[int]):
 class ViT(nn.Module):
     def __init__(
         self,
-        in_chans: int = 3,
+        in_channels: int = 3,
         patch_size: param3_t[int] = 16,
+        adaptive_patch_embed: bool = True,
         embed_dim: int = 768,
         pos_embed_shape: tuple3_t[int] = (8, 16, 16),
         pretrained_pos_embed_shape: tuple2_t[int] | tuple3_t[int] | None = None,
-        rope_rescale_shape: tuple3_t[int] = (8, 16, 16),
+        rope_rescale_shape: tuple3_t[int] | None = None,
         rope_base: tuple3_t[float] = (233., 10000., 10000.),
         rope_merge_hw: bool = True,
         depth: int = 12,
@@ -186,7 +189,7 @@ class ViT(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
-        self.patch_embed = PatchEmbed(patch_size, in_chans, embed_dim, flatten=False)
+        self.patch_embed = PatchEmbed(patch_size, in_channels, embed_dim, adaptive_patch_embed, False)
         self.cls_token = NoWeightDecayParameter(torch.empty(1, 1, embed_dim))
         self.pos_embed = NoWeightDecayParameter(torch.empty(1, embed_dim, *pos_embed_shape))
         self.pretrained_pos_embed_shape = pretrained_pos_embed_shape
@@ -217,7 +220,7 @@ class ViT(nn.Module):
         if eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
 
-    def prepare_seq_input(self, x: sac.SpatialTensor):
+    def prepare_seq_input(self, x: torch.Tensor):
         x = self.patch_embed(x)
         shape = x.shape[2:]
         x += resample(self.pos_embed, shape)
@@ -231,14 +234,21 @@ class ViT(nn.Module):
         )
         return x, shape
 
-    def forward(self, x: sac.SpatialTensor):
+    def forward_features(self, x: torch.Tensor):
         x, shape = self.prepare_seq_input(x)
         self.rope.prepare(shape)
+        states = []
         for block in self.blocks:
             if self.grad_ckpt:
                 x = checkpoint.checkpoint(block, x)
             else:
                 x = block(x)
+            states.append(x)
+        self.rope.reset()
+        return states
+
+    def forward(self, x: torch.Tensor):
+        x = self.forward_features(x)[-1]
         return self.norm(x)
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):

@@ -22,8 +22,8 @@ class SpatialRotaryEmbedding(nn.Module):
 
     def __init__(self,
         dim: int,
-        rescale_shape: tuple3_t[int] = (8, 16, 16),
-        base: tuple3_t[float] = (233, 10000, 10000),
+        rescale_shape: tuple3_t[int] | None = None,
+        base: tuple3_t[float] = (233., 10000., 10000.),
         merge_hw: bool = True,
     ):
         super().__init__()
@@ -40,7 +40,7 @@ class SpatialRotaryEmbedding(nn.Module):
             if merge_hw and i > 0:
                 exp = -torch.arange(0, dim, 2) / dim
             else:
-                exp = -torch.arange(2, dim + 2, 2) / dim
+                exp = -torch.arange(1, dim, 2) / dim
                 if i == 0:
                     exp = einops.repeat(exp, '... -> (r ...)', r=2)
             self.register_buffer(f'ω{i}', torch.pow(base[i], exp), False)
@@ -48,9 +48,10 @@ class SpatialRotaryEmbedding(nn.Module):
 
     @lru_cache
     def get_rotation(self, spatial_shape: tuple3_t[int]) -> tuple[torch.Tensor, torch.Tensor]:
+        rescale_shape = self.rescale_shape or spatial_shape
         θ = [
             torch.outer(
-                torch.arange(spatial_shape[i], device=self.ω[i].device) * self.rescale_shape[i] / spatial_shape[i],
+                torch.arange(spatial_shape[i], device=self.ω[i].device) * rescale_shape[i] / spatial_shape[i],
                 self.ω[i],
             )
             for i in range(3)
