@@ -89,12 +89,14 @@ class SpatialTensor(torch.Tensor):
         return self.as_subclass(torch.Tensor)
 
 class InflatableConv3d(nn.Conv3d):
-    def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
+    def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', as_tensor: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
-        for stride in self.stride:
-            assert stride & stride - 1 == 0, 'only support power of 2'
+        assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
         assert self.stride[1] == self.stride[2], 'only support stride_h == stride_w'
-        self.num_downsamples = self.stride[1].bit_length() - 1
+        if not as_tensor:
+            assert self.stride[1] & self.stride[1] - 1 == 0, 'only support power of 2'
+            self.num_downsamples = self.stride[1].bit_length() - 1
+        self.as_tensor = as_tensor
         assert self.padding_mode == 'zeros'
         assert d_inflation in ['average', 'center']
         self.inflation = d_inflation
@@ -137,7 +139,10 @@ class InflatableConv3d(nn.Conv3d):
                     dr=stride[0],
                 )
         x: SpatialTensor = nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
-        x.num_downsamples += self.num_downsamples
+        if self.as_tensor:
+            x = x.as_tensor()
+        else:
+            x.num_downsamples += self.num_downsamples
         return x
 
 class InflatableInputConv3d(InflatableConv3d):

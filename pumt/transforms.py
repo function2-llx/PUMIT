@@ -84,6 +84,7 @@ def ensure_rgb(x: torch.Tensor, enable: bool = True, batched: bool = False) -> t
     return x
 
 def rgb_to_gray(x: torch.Tensor, batched: bool = False) -> torch.Tensor:
+    # RGB to grayscale ref: https://www.itu.int/rec/R-REC-BT.601
     maybe_batch = 'n' if batched else ''
     return einops.rearrange(
         einops.einsum(x, x.new_tensor([0.299, 0.587, 0.114]), f'{maybe_batch} c ..., c ... -> {maybe_batch} ...'),
