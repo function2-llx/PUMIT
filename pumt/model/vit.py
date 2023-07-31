@@ -170,7 +170,7 @@ class ViT(nn.Module):
         pos_embed_shape: tuple3_t[int] = (8, 16, 16),
         pretrained_pos_embed_shape: tuple2_t[int] | tuple3_t[int] | None = None,
         rope_rescale_shape: tuple3_t[int] = (8, 16, 16),
-        rope_base: tuple3_t[float] = (23333., 10000., 10000.),
+        rope_base: tuple3_t[float] = (233., 10000., 10000.),
         rope_merge_hw: bool = True,
         depth: int = 12,
         num_heads: int = 12,
