@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from luolib.types import tuple3_t
+from monai.utils import fall_back_tuple
 
 def broadcast_cat(a: torch.Tensor, b: torch.Tensor, dim: int = -1):
     tensors = torch.broadcast_tensors(a, b)
@@ -20,12 +21,7 @@ class SpatialRotaryEmbedding(nn.Module):
         # let's wish we can have nn.BufferList soon: https://github.com/pytorch/pytorch/issues/37386 https://github.com/pytorch/pytorch/issues/35735
         return [self.get_buffer(f'ω{i}') for i in range(3)]
 
-    def __init__(self,
-        dim: int,
-        rescale_shape: tuple3_t[int] | None = None,
-        base: tuple3_t[float] = (233., 10000., 10000.),
-        merge_hw: bool = True,
-    ):
+    def __init__(self,dim: int, rescale_shape: tuple3_t[int], base: tuple3_t[float], merge_hw: bool = True):
         super().__init__()
         self.dim = dim
         self.rescale_shape = rescale_shape
@@ -48,7 +44,7 @@ class SpatialRotaryEmbedding(nn.Module):
 
     @lru_cache
     def get_rotation(self, spatial_shape: tuple3_t[int]) -> tuple[torch.Tensor, torch.Tensor]:
-        rescale_shape = self.rescale_shape or spatial_shape
+        rescale_shape = fall_back_tuple(self.rescale_shape, spatial_shape)
         θ = [
             torch.outer(
                 torch.arange(spatial_shape[i], device=self.ω[i].device) * rescale_shape[i] / spatial_shape[i],
