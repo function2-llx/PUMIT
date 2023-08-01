@@ -2,31 +2,28 @@ from pathlib import Path
 
 import einops
 from jsonargparse import ArgumentParser
-from omegaconf import OmegaConf
 import torch
 from torch.nn import functional as nnf
 from torchvision.utils import save_image
 
-from luolib.conf.utils import instantiate
 from luolib.models import load_ckpt
-from pumt.conv import SpatialTensor
-from pumt.tokenizer import VQVAEModel
-
-# from pumt.tokenizer.model import VQGAN
+from pumt.sac import SpatialTensor
+from pumt.tokenizer import VQTokenizer
 
 def main():
     torch.set_float32_matmul_precision('high')
+    torch.set_default_device('cuda')
     parser = ArgumentParser()
-    parser.add_class_arguments(VQVAEModel, 'model')
+    parser.add_subclass_arguments(VQTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--out_path', type=Path)
-    parser.add_argument('--nr', type=int, default=64)
-    parser.add_argument('--nc', type=int, default=64)
+    parser.add_argument('--nr', type=int, default=32)
+    parser.add_argument('--nc', type=int, default=32)
     args = parser.parse_args()
     args = parser.instantiate_classes(args)
     print(args)
-    model: VQVAEModel = args.model.cuda().eval()
-    load_ckpt(model, args.ckpt_path, state_dict_key='vqvae')
+    model: VQTokenizer = args.model.eval()
+    load_ckpt(model, args.ckpt_path, state_dict_key='model')
     z = einops.rearrange(model.quantize.embedding.weight[:args.nr * args.nc], 'n c -> n c 1 1 1')
     z = SpatialTensor(z, aniso_d=5)
     z.num_downsamples = 4
