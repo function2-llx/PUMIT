@@ -23,3 +23,4 @@ init_args:
     train_tz: 8
     train_tx: 16
     train_scale_x: [0.75, 2.0]
+    isotropic_th: 1.5

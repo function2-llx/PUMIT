@@ -51,6 +51,7 @@ class TransformConf:
     gamma: tuple2_t[float] = (0.7, 1.5)
     gamma_p: float = 0.3
     stride: int = 16
+    isotropic_th: float = 3.,
 
 class PUMTDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
     def __init__(
@@ -107,7 +108,7 @@ class PUMTDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     )
                 else:
                     scale_x = 1.
-                if spacing_z <= 3 * spacing_x and self.R.uniform() < trans_conf.scale_z_p:
+                if spacing_z <= trans_conf.isotropic_th * spacing_x and self.R.uniform() < trans_conf.scale_z_p:
                     scale_z = self.R.uniform(*trans_conf.scale_z)
                 else:
                     scale_z = 1.
@@ -210,7 +211,7 @@ class PUMTDataModule(LightningDataModule):
                 ),
                 mt.ToDeviceD(DataKey.IMG, self.device),
                 UpdateSpacingD(),
-                RandAffineCropD(trans_conf.rotate_p),
+                RandAffineCropD(trans_conf.rotate_p, trans_conf.isotropic_th),
                 *[
                     mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
                     for i in range(3)

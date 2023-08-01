@@ -19,8 +19,9 @@ class UpdateSpacingD(mt.Transform):
         return data
 
 class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
-    def __init__(self, rotate_p: float, lazy: bool = False):
+    def __init__(self, rotate_p: float, isotropic_th: float, lazy: bool = False):
         self.rotate_p = rotate_p
+        self.isotropic_th = isotropic_th
         mt.LazyTransform.__init__(self, lazy)
 
     def __call__(self, data: Mapping[Hashable, ...], lazy: bool | None = None):
@@ -28,7 +29,7 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
         trans_info = data['_trans']
         img: MetaTensor = data[DataKey.IMG]
         # following nnU-Net
-        rotate_x_range = 0. if (img.pixdim[0] > 3 * min(img.pixdim[1:])) else np.pi / 6
+        rotate_x_range = 0. if (img.pixdim[0] > self.isotropic_th * min(img.pixdim[1:])) else np.pi / 6
         rotate_range = (np.pi / 2, rotate_x_range, rotate_x_range)
         sample_size = trans_info['size']
         cropper = mt.Compose(
