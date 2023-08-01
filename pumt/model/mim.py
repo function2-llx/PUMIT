@@ -145,7 +145,7 @@ class ViTForMIM(ViT, LightningModule):
         token_probs = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)
-        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
+        if self.trainer.is_global_zero and (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
             # TODO (or not to do): support nearest, gumbel
@@ -165,5 +165,4 @@ class ViTForMIM(ViT, LightningModule):
             for i in range(x.shape[2]):
                 save_image(x[0, :, i], plot_dir / f'{i}-origin.png')
                 save_image(x_rec[0, :, i], plot_dir / f'{i}-rec.png')
-
         return loss
