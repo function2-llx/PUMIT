@@ -141,13 +141,13 @@ class ViTForMIM(ViT, LightningModule):
         token_probs = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)
-        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps:
+        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
             # TODO (or not to do): support nearest, gumbel
             token_ids = token_ids[0:1].detach().clone()
-            token_ids[masked_mask[0:1]] = token_probs[0:1]
-            d, h, w = spatial_token_ids.shape[2:]
+            token_ids[masked_mask[0:1]] = token_probs[0:1].to(token_ids)
+            d, h, w = spatial_token_ids.shape[1:-1]
             z_q = einops.rearrange(
                 einops.einsum(
                     token_ids, self.tokenizer.quantize.embedding.weight,

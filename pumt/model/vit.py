@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from pathlib import Path
 
 import einops
+from jsonargparse import class_from_function
 import numpy as np
 from timm.layers import DropPath
 import torch
@@ -185,7 +188,7 @@ class ViT(nn.Module):
         drop_path_rate: float = 0.,
         grad_ckpt: bool = False,
         patch_embed_grad_scale: float = 1.,
-        eva02_pretrained_path: Path | None = None,
+        # eva02_pretrained_path: Path | None = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -216,8 +219,6 @@ class ViT(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
-        if eva02_pretrained_path is not None:
-            load_ckpt(self, eva02_pretrained_path, 'module')
 
     def prepare_seq_input(self, x: torch.Tensor):
         x = self.patch_embed(x)
@@ -269,3 +270,10 @@ class ViT(nn.Module):
             state_dict['pos_embed'] = resample(pos_embed, self.pos_embed.shape[2:])
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    @classmethod
+    def from_pretrained(cls, model: ViT, pretrained_path: Path) -> ViT:
+        load_ckpt(model, pretrained_path, 'module')
+        return model
+
+from_pretrained = class_from_function(ViT.from_pretrained)
