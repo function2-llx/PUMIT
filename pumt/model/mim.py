@@ -155,9 +155,9 @@ class ViTForMIM(ViT, LightningModule):
             z_q = einops.rearrange(
                 einops.einsum(
                     token_ids, self.tokenizer.quantize.embedding.weight,
-                    '1 ... ne, ne c -> 1 ... c',
+                    '... ne, ne c -> ... c',
                 ),
-                '1 (d h w) c -> 1 c d h w', d=d, h=h, w=w,
+                'n (d h w) c -> n c d h w', d=d, h=h, w=w,
             )
             z_q = sac.SpatialTensor(z_q, spatial_token_ids.aniso_d, spatial_token_ids.num_downsamples)
             x_rec = (self.tokenizer.decode(z_q) + 1) / 2
