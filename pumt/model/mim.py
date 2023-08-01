@@ -11,6 +11,7 @@ from torch import nn
 from torch.utils import checkpoint
 from torchvision.utils import save_image
 
+from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
 from monai.config import PathLike
 
@@ -23,7 +24,6 @@ class ViTForMIM(ViT, LightningModule):
     input_norm_mean: torch.Tensor
     input_norm_std: torch.Tensor
 
-    # tokenizer typed as dict https://github.com/omni-us/jsonargparse/issues/330
     def __init__(
         self,
         *args,
@@ -33,9 +33,11 @@ class ViTForMIM(ViT, LightningModule):
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
         plot_image_every_n_steps: int = 400,
+        eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):
         """mask_layer_ids: layers that include mask tokens as input"""
+        # note: intercept the `eva02_pretrained_path` parameter or mask_token will not be loaded
         super().__init__(*args, **kwargs)
         assert tokenizer.stride == self.patch_embed.patch_size
         self.tokenizer = tokenizer
@@ -61,6 +63,8 @@ class ViTForMIM(ViT, LightningModule):
             persistent=False,
         )
         self.plot_image_every_n_steps = plot_image_every_n_steps
+        if eva02_pretrained_path is not None:
+            load_ckpt(self, eva02_pretrained_path, 'module')
 
     def input_norm(self, x: torch.Tensor):
         return (x - self.input_norm_mean) / self.input_norm_std
@@ -141,13 +145,13 @@ class ViTForMIM(ViT, LightningModule):
         token_probs = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)
-        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps:
+        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
             # TODO (or not to do): support nearest, gumbel
             token_ids = token_ids[0:1].detach().clone()
-            token_ids[masked_mask[0:1]] = token_probs[0:1]
-            d, h, w = spatial_token_ids.shape[2:]
+            token_ids[masked_mask[0:1]] = token_probs[0:1].to(token_ids)
+            d, h, w = spatial_token_ids.shape[1:-1]
             z_q = einops.rearrange(
                 einops.einsum(
                     token_ids, self.tokenizer.quantize.embedding.weight,
