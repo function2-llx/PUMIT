@@ -36,7 +36,7 @@ class VQTokenizer(ABC, nn.Module):
         pass
 
     @abstractmethod
-    def decode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
         pass
 
     def forward(self, x: sac.SpatialTensor) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:

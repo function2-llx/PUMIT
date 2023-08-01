@@ -9,9 +9,10 @@ from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 import torch
 from torch import nn
 from torch.utils import checkpoint
+from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
+from monai.config import PathLike
 
 from pumt import sac
 from pumt.optim import build_lr_scheduler, build_optimizer
@@ -19,6 +20,9 @@ from pumt.tokenizer import VQTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):
+    input_norm_mean: torch.Tensor
+    input_norm_std: torch.Tensor
+
     # tokenizer typed as dict https://github.com/omni-us/jsonargparse/issues/330
     def __init__(
         self,
@@ -28,6 +32,7 @@ class ViTForMIM(ViT, LightningModule):
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
+        plot_image_every_n_steps: int = 400,
         **kwargs,
     ):
         """mask_layer_ids: layers that include mask tokens as input"""
@@ -35,6 +40,7 @@ class ViTForMIM(ViT, LightningModule):
         assert tokenizer.stride == self.patch_embed.patch_size
         self.tokenizer = tokenizer
         tokenizer.requires_grad_(False)
+        tokenizer.eval()
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
@@ -42,6 +48,22 @@ class ViTForMIM(ViT, LightningModule):
         self.mim_loss = nn.CrossEntropyLoss()
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+        assert self.patch_embed.adaptive
+        self.register_buffer(
+            'input_norm_mean',
+            einops.rearrange(torch.tensor(IMAGENET_DEFAULT_MEAN), 'c -> c 1 1 1'),
+            persistent=False,
+        )
+        self.register_buffer(
+            'input_norm_std',
+            einops.rearrange(torch.tensor(IMAGENET_DEFAULT_STD), 'c -> c 1 1 1'),
+            persistent=False,
+        )
+        self.plot_image_every_n_steps = plot_image_every_n_steps
+
+    def input_norm(self, x: torch.Tensor):
+        return (x - self.input_norm_mean) / self.input_norm_std
 
     def state_dict(self, *args, **kwargs):
         return {
@@ -106,15 +128,38 @@ class ViTForMIM(ViT, LightningModule):
         # https://github.com/Lightning-AI/lightning/issues/17972
         scheduler.step_update(0)
 
-    def training_step(self, batch: tuple[torch.Tensor, int, Path], batch_idx: int, *args, **kwargs):
+    def training_step(self, batch: tuple[torch.Tensor, int, list[PathLike]], batch_idx: int, *args, **kwargs):
         x = sac.SpatialTensor(*batch[:2])
-        token_ids = self.tokenizer.tokenize(x)
+        tokenizer_input = 2 * x - 1
+        spatial_token_ids: sac.SpatialTensor = self.tokenizer.tokenize(tokenizer_input, flatten=False)
+        token_ids = einops.rearrange(spatial_token_ids.as_tensor(), 'n ... c -> n (...) c')
         batch_size, seq_len = token_ids.shape[:2]
         num_visible_patches = int(seq_len * (1 - self.mask_ratio))
         visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
-        hidden_states = self(x, visible_idx)[:, 1:]
+        hidden_states = self(self.input_norm(x), visible_idx)[:, 1:]
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         token_probs = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)
+        if (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps:
+            plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
+            plot_dir.mkdir(parents=True)
+            # TODO (or not to do): support nearest, gumbel
+            token_ids = token_ids[0:1].detach().clone()
+            token_ids[masked_mask[0:1]] = token_probs[0:1]
+            d, h, w = spatial_token_ids.shape[2:]
+            z_q = einops.rearrange(
+                einops.einsum(
+                    token_ids, self.tokenizer.quantize.embedding.weight,
+                    '1 ... ne, ne c -> 1 ... c',
+                ),
+                '1 (d h w) c -> 1 c d h w', d=d, h=h, w=w,
+            )
+            z_q = sac.SpatialTensor(z_q, spatial_token_ids.aniso_d, spatial_token_ids.num_downsamples)
+            x_rec = (self.tokenizer.decode(z_q) + 1) / 2
+            (plot_dir / 'path.txt').write_text(str(batch[-1][0]))
+            for i in range(x.shape[2]):
+                save_image(x[0, :, i], plot_dir / f'{i}-origin.png')
+                save_image(x_rec[0, :, i], plot_dir / f'{i}-rec.png')
+
         return loss

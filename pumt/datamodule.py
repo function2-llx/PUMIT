@@ -201,6 +201,7 @@ class PUMTDataModule(LightningDataModule):
 
     def train_transform(self) -> Callable:
         # TODO: also enable skipping the transform deterministically?
+        # note: intensity range is [0, 1] before and after transform
         trans_conf = self.trans_conf
         return mt.Compose(
             [

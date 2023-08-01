@@ -62,5 +62,5 @@ class SimpleVQTokenizer(VQTokenizer):
     def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
         return self.encoder(x)
 
-    def decode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
-        return self.decoder(x)
+    def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
+        return self.decoder(z_q)

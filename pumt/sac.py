@@ -16,13 +16,13 @@ class SpatialTensor(torch.Tensor):
     # https://github.com/pytorch/pytorch/issues/105644
 
     @staticmethod
-    def __new__(cls, x, aniso_d: int, *args, **kwargs):
+    def __new__(cls, x, aniso_d: int, num_downsamples: int = 0, *args, **kwargs):
         return torch.as_tensor(x, *args, **kwargs).as_subclass(SpatialTensor)
 
-    def __init__(self, _x, aniso_d: int, *_args, **_kwargs):
+    def __init__(self, _x, aniso_d: int, num_downsamples: int = 0, *_args, **_kwargs):
         super().__init__()
         self.aniso_d = aniso_d
-        self.num_downsamples = 0
+        self.num_downsamples = num_downsamples
 
     def __repr__(self, *args, **kwargs):
         aniso_d = getattr(self, 'aniso_d', 'missing')
@@ -89,14 +89,12 @@ class SpatialTensor(torch.Tensor):
         return self.as_subclass(torch.Tensor)
 
 class InflatableConv3d(nn.Conv3d):
-    def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', as_tensor: bool = False, **kwargs):
+    def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
         super().__init__(*args, **kwargs)
         assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
         assert self.stride[1] == self.stride[2], 'only support stride_h == stride_w'
-        if not as_tensor:
-            assert self.stride[1] & self.stride[1] - 1 == 0, 'only support power of 2'
-            self.num_downsamples = self.stride[1].bit_length() - 1
-        self.as_tensor = as_tensor
+        assert self.stride[1] & self.stride[1] - 1 == 0, 'only support power of 2'
+        self.num_downsamples = self.stride[1].bit_length() - 1
         assert self.padding_mode == 'zeros'
         assert d_inflation in ['average', 'center']
         self.inflation = d_inflation
@@ -139,10 +137,7 @@ class InflatableConv3d(nn.Conv3d):
                     dr=stride[0],
                 )
         x: SpatialTensor = nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
-        if self.as_tensor:
-            x = x.as_tensor()
-        else:
-            x.num_downsamples += self.num_downsamples
+        x.num_downsamples += self.num_downsamples
         return x
 
 class InflatableInputConv3d(InflatableConv3d):
