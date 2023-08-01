@@ -23,7 +23,7 @@ class SaveConfigCallback(LightningSaveConfigCallback):
 class ModelCheckpoint(LightningModelCheckpoint):
     def __resolve_ckpt_dir(self, trainer):
         model: ViTForMIM = trainer.model
-        return model.run_dir
+        return model.run_dir / 'checkpoint'
 
 class CLI(LightningCLI):
     def add_arguments_to_parser(self, parser):

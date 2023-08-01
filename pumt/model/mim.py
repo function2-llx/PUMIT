@@ -66,12 +66,12 @@ class ViTForMIM(ViT, LightningModule):
         if eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
 
-    def input_norm(self, x: torch.Tensor):
+    def input_norm(self, x: sac.SpatialTensor):
         return (x - self.input_norm_mean) / self.input_norm_std
 
     def state_dict(self, *args, **kwargs):
         return {
-            k: v for k, v in super().state_dict(*args, **kwargs)
+            k: v for k, v in super().state_dict(*args, **kwargs).items()
             if k.startswith('tokenizer.')
         }
 
@@ -89,6 +89,7 @@ class ViTForMIM(ViT, LightningModule):
         if visible_idx is None:
             return super().forward(x)
         x, spatial_shape = self.prepare_seq_input(x)
+        x = x.as_tensor()
         self.rope.prepare(spatial_shape, visible_idx)
         batch_size, seq_len, dim = x.shape
         seq_len -= 1  # exclude cls token
@@ -135,34 +136,36 @@ class ViTForMIM(ViT, LightningModule):
     def training_step(self, batch: tuple[torch.Tensor, int, list[PathLike]], batch_idx: int, *args, **kwargs):
         x = sac.SpatialTensor(*batch[:2])
         tokenizer_input = 2 * x - 1
-        spatial_token_ids: sac.SpatialTensor = self.tokenizer.tokenize(tokenizer_input, flatten=False)
-        token_ids = einops.rearrange(spatial_token_ids.as_tensor(), 'n ... c -> n (...) c')
+        quant_out = self.tokenizer.tokenize(tokenizer_input)
+        # TODO (or not to do): support nearest, gumbel
+        token_ids = einops.rearrange(quant_out.index.as_tensor(), 'n ... ne -> n (...) ne')
         batch_size, seq_len = token_ids.shape[:2]
         num_visible_patches = int(seq_len * (1 - self.mask_ratio))
         visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
         hidden_states = self(self.input_norm(x), visible_idx)[:, 1:]
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
-        token_probs = self.mim_head(hidden_states[masked_mask])
-        loss = self.mim_loss(token_probs, token_ids[masked_mask])
+        masked_token_probs = self.mim_head(hidden_states[masked_mask])
+        loss = self.mim_loss(masked_token_probs, token_ids[masked_mask])
         self.log('train/loss', loss)
         if self.trainer.is_global_zero and (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
-            # TODO (or not to do): support nearest, gumbel
-            token_ids = token_ids[0:1].detach().clone()
-            token_ids[masked_mask[0:1]] = token_probs[0:1].to(token_ids)
-            d, h, w = spatial_token_ids.shape[1:-1]
-            z_q = einops.rearrange(
+            mim_token_ids = token_ids[0:1].detach().clone()
+            mim_token_ids[masked_mask[0:1]] = masked_token_probs[0:1].to(token_ids)
+            d, h, w = quant_out.z_q.shape[2:]
+            mim_z_q = einops.rearrange(
                 einops.einsum(
-                    token_ids, self.tokenizer.quantize.embedding.weight,
+                    mim_token_ids, self.tokenizer.quantize.embedding.weight,
                     '... ne, ne c -> ... c',
                 ),
                 'n (d h w) c -> n c d h w', d=d, h=h, w=w,
             )
-            z_q = sac.SpatialTensor(z_q, spatial_token_ids.aniso_d, spatial_token_ids.num_downsamples)
-            x_rec = (self.tokenizer.decode(z_q) + 1) / 2
+            mim_z_q = sac.SpatialTensor(mim_z_q, quant_out.z_q.aniso_d, quant_out.z_q.num_downsamples)
+            mim_x_rec = (self.tokenizer.decode(mim_z_q) + 1) / 2
+            x_rec = (self.tokenizer.decode(quant_out.z_q[0:1]) + 1) / 2
             (plot_dir / 'path.txt').write_text(str(batch[-1][0]))
             for i in range(x.shape[2]):
                 save_image(x[0, :, i], plot_dir / f'{i}-origin.png')
                 save_image(x_rec[0, :, i], plot_dir / f'{i}-rec.png')
+                save_image(mim_x_rec[0, :, i], plot_dir / f'{i}-mim-rec.png')
         return loss

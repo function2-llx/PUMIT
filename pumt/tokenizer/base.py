@@ -51,13 +51,10 @@ class VQTokenizer(ABC, nn.Module):
             state_dict.update(self.state_dict(prefix=prefix))
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def tokenize(self, x: sac.SpatialTensor, flatten: bool = True) -> torch.Tensor:
+    def tokenize(self, x: sac.SpatialTensor) -> VectorQuantizerOutput:
         z = self.encode(x)
         quant_out: VectorQuantizerOutput = self.quantize(z)
-        index = quant_out.index
-        if flatten:
-            index = einops.rearrange(index.as_tensor(), 'n ... d -> n (...) d')
-        return index
+        return quant_out
 
     def get_ref_param(self) -> nn.Parameter | None:
         return None

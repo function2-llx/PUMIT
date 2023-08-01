@@ -24,6 +24,7 @@ trainer:
       every_n_train_steps: 10000
       save_top_k: -1
       verbose: false
+      filename: "{step}"
   - class_path: __main__.ModelCheckpoint
     init_args:
       every_n_train_steps: 1000
