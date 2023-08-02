@@ -7,5 +7,5 @@ python scripts/tokenizer/main.py \
     --model.quantize.temperature 0.1 \
     --loss.quant_weight=-0.1 \
     --data.trans_conf.isotropic_th 1.5 \
-    --pretrained_ckpt_path pre-trained/simple.ckpt \
+    --training.pretrained_ckpt_path pre-trained/simple.ckpt \
     $@
