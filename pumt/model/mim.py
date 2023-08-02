@@ -33,6 +33,7 @@ class ViTForMIM(ViT, LightningModule):
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
         plot_image_every_n_steps: int = 400,
+        temperature: float = 1.,
         eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):
@@ -65,6 +66,7 @@ class ViTForMIM(ViT, LightningModule):
             persistent=False,
         )
         self.plot_image_every_n_steps = plot_image_every_n_steps
+        self.temperature = temperature
         if eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
 
@@ -146,7 +148,10 @@ class ViTForMIM(ViT, LightningModule):
         hidden_states = self(self.input_norm(x), visible_idx)[:, 1:]
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         masked_token_logits = self.mim_head(hidden_states[masked_mask])
-        loss = self.mim_loss(masked_token_logits.log_softmax(dim=-1), token_logits[masked_mask].log_softmax(dim=-1))
+        loss = self.mim_loss(
+            (masked_token_logits / self.temperature).log_softmax(dim=-1),
+            (token_logits[masked_mask] / self.temperature).log_softmax(dim=-1),
+        )
         self.log('train/loss', loss)
         if self.trainer.is_global_zero and (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
