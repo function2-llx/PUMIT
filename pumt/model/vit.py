@@ -189,6 +189,7 @@ class ViT(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.adaptive_patch_embed = adaptive_patch_embed
         self.patch_embed = PatchEmbed(patch_size, in_channels, embed_dim, adaptive_patch_embed, False)
         self.cls_token = NoWeightDecayParameter(torch.empty(1, 1, embed_dim))
         self.pos_embed = NoWeightDecayParameter(torch.empty(1, embed_dim, *pos_embed_shape))
@@ -256,7 +257,12 @@ class ViT(nn.Module):
                 state_dict.pop(k)
         if (weight := state_dict.get('patch_embed.proj.weight')) is not None and weight.ndim == 4:
             # conv2d weight from EVA-02
-            state_dict['patch_embed.proj.weight'] = nnf.interpolate(weight.float(), self.patch_embed.patch_size[1:], mode='bicubic')
+            weight = nnf.interpolate(weight.float(), self.patch_embed.patch_size[1:], mode='bicubic')
+            if not self.adaptive_patch_embed:
+                d = self.patch_embed.patch_size[0]
+                weight = einops.repeat(weight / d, 'co ci ... -> co ci d ...', d=d)
+            state_dict['patch_embed.proj.weight'] = weight
+
         if (pos_embed := state_dict.get('pos_embed')) is not None:
             if pos_embed.ndim == 3:
                 cls_pos_embed, pos_embed = pos_embed[:, 1], pos_embed[:, 1:]
