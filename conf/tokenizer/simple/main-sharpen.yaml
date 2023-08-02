@@ -1,4 +1,4 @@
-model: pre-trained.yaml
+model: model.yaml
 optimizer_g:
   class_path: torch.optim.AdamW
   init_args:
