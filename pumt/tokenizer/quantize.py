@@ -9,14 +9,13 @@ from torch.nn import functional as nnf
 
 from luolib.utils import channel_first, channel_last
 
-from pumt import sac
-
 @dataclass
 class VectorQuantizerOutput:
-    z_q: sac.SpatialTensor
-    index: sac.SpatialTensor
+    z_q: torch.Tensor
+    index: torch.Tensor
     loss: torch.Tensor
     probs: torch.Tensor | None = None
+    logits: torch.Tensor | None = None
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
 class VectorQuantizer(nn.Module):
@@ -97,7 +96,7 @@ class VectorQuantizer(nn.Module):
                 index = probs
                 z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index, loss, probs)
+            return VectorQuantizerOutput(z_q, index, loss, probs, logits)
 
     def get_codebook_entry(self, index: torch.Tensor):
         if self.mode == 'soft':

@@ -41,13 +41,15 @@ class ViTForMIM(ViT, LightningModule):
         super().__init__(*args, **kwargs)
         assert tokenizer.stride == self.patch_embed.patch_size
         self.tokenizer = tokenizer
+        # TODO (or not to do): support nearest, gumbel
+        assert tokenizer.quantize.mode == 'soft'
         tokenizer.requires_grad_(False)
         tokenizer.eval()
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
         self.mim_head = nn.Linear(self.embed_dim, tokenizer.codebook_size)
-        self.mim_loss = nn.CrossEntropyLoss()
+        self.mim_loss = nn.KLDivLoss(reduction='batchmean', log_target=True)
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
@@ -137,25 +139,24 @@ class ViTForMIM(ViT, LightningModule):
         x = sac.SpatialTensor(*batch[:2])
         tokenizer_input = 2 * x - 1
         quant_out = self.tokenizer.tokenize(tokenizer_input)
-        # TODO (or not to do): support nearest, gumbel
-        token_ids = einops.rearrange(quant_out.index.as_tensor(), 'n ... ne -> n (...) ne')
-        batch_size, seq_len = token_ids.shape[:2]
+        token_logits = einops.rearrange(quant_out.logits.as_tensor(), 'n ... ne -> n (...) ne')
+        batch_size, seq_len = token_logits.shape[:2]
         num_visible_patches = int(seq_len * (1 - self.mask_ratio))
-        visible_idx, _ = token_ids.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
+        visible_idx, _ = token_logits.new_ones(batch_size, seq_len).multinomial(num_visible_patches).sort()
         hidden_states = self(self.input_norm(x), visible_idx)[:, 1:]
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
-        masked_token_probs = self.mim_head(hidden_states[masked_mask])
-        loss = self.mim_loss(masked_token_probs, token_ids[masked_mask])
+        masked_token_logits = self.mim_head(hidden_states[masked_mask])
+        loss = self.mim_loss(masked_token_logits.log_softmax(dim=-1), token_logits[masked_mask].log_softmax(dim=-1))
         self.log('train/loss', loss)
         if self.trainer.is_global_zero and (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
-            mim_token_ids = token_ids[0:1].detach().clone()
-            mim_token_ids[masked_mask[0:1]] = masked_token_probs[0:1].to(token_ids)
+            mim_token_logits = token_logits[0:1].detach().clone()
+            mim_token_logits[masked_mask[0:1]] = masked_token_logits[0:1].to(token_logits)
             d, h, w = quant_out.z_q.shape[2:]
             mim_z_q = einops.rearrange(
                 einops.einsum(
-                    mim_token_ids, self.tokenizer.quantize.embedding.weight,
+                    mim_token_logits.softmax(dim=-1), self.tokenizer.quantize.embedding.weight,
                     '... ne, ne c -> ... c',
                 ),
                 'n (d h w) c -> n c d h w', d=d, h=h, w=w,
