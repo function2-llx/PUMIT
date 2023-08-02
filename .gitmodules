@@ -1,6 +1,3 @@
 [submodule "third-party/LuoLib"]
 	path = third-party/LuoLib
 	url = git@github.com:function2-llx/LuoLib.git
-[submodule "third-party/SMIT"]
-	path = third-party/SMIT
-	url = git@github.com:The-Veeraraghavan-Lab/SMIT.git
