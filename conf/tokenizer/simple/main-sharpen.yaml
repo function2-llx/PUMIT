@@ -34,7 +34,7 @@ data: data.yaml
 training:
   exp_name: tokenizer-simple
   seed: 233333
-  max_steps: 100000
+  max_steps: 120000
   disc_loss_momentum: 0.9
   use_gan_th: 0.025
   output_dir: output/tokenizer-simple
