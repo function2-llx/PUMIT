@@ -27,6 +27,7 @@ class VectorQuantizer(nn.Module):
         in_channels: int | None = None,
         hard_gumbel: bool = True,
         beta: float = 0.25,
+        temperature: float = 1.,
     ):
         super().__init__()
         self.mode = mode
@@ -41,7 +42,7 @@ class VectorQuantizer(nn.Module):
             self.proj = nn.Linear(in_channels, num_embeddings)
             if mode == 'gumbel':
                 self.hard_gumbel = hard_gumbel
-                self.temperature = 1.
+            self.temperature = temperature
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
@@ -80,7 +81,7 @@ class VectorQuantizer(nn.Module):
             z_q = channel_first(z_q).contiguous()
             return VectorQuantizerOutput(z_q, index, loss)
         else:
-            logits: torch.Tensor = self.proj(z)
+            logits: torch.Tensor = self.proj(z) / self.temperature
             probs = logits.softmax(dim=-1)
             entropy = einops.einsum(logits.log_softmax(dim=-1), probs, '... ne, ... ne -> ...')
             loss = entropy.mean()
