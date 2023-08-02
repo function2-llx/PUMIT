@@ -18,7 +18,7 @@ loss: loss.yaml
 optimizer_d:
   class_path: torch.optim.AdamW
   init_args:
-    lr: 2e-4
+    lr: 1e-3
     weight_decay: 5e-2
 lr_scheduler_d:
   scheduler:
