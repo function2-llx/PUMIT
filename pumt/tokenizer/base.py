@@ -17,9 +17,9 @@ from .quantize import VectorQuantizer, VectorQuantizerOutput
 class VQTokenizer(ABC, nn.Module):
     is_pretrained: bool = False
 
-    def __init__(self, vq_kwargs: dict, *args, **kwargs):
+    def __init__(self, quantize: VectorQuantizer, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.quantize = VectorQuantizer(**vq_kwargs)
+        self.quantize = quantize
 
     @property
     @abstractmethod
