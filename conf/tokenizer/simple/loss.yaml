@@ -1,4 +1,4 @@
-quant_weight: 5e-6
+quant_weight: 1e-7
 discriminator:
   class_path: pumt.tokenizer.discriminator.SimplePatchDiscriminator
   init_args:

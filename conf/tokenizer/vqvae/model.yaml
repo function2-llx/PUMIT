@@ -8,7 +8,9 @@ init_args:
     layer_channels: [128, 128, 256, 512]
     num_res_blocks: 2
     additional_interpolation: true
-  vq_kwargs:
-    num_embeddings: 8192
-    embedding_dim: 256
-    mode: soft
+  quantize:
+    class_path: pumt.tokenizer.VectorQuantizer
+    init_args:
+      num_embeddings: 8192
+      embedding_dim: 256
+      mode: gumbel

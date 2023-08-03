@@ -10,7 +10,7 @@ lr_scheduler_g:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 5000
+      warmup_t: 15000
       warmup_prefix: true
   interval: step
   frequency: 100
@@ -26,7 +26,7 @@ lr_scheduler_d:
     init_args:
       t_in_epochs: false
       lr_min: 1e-6
-      warmup_t: 5000
+      warmup_t: 15000
       warmup_prefix: true
   interval: step
   frequency: 100
@@ -34,7 +34,7 @@ data: data.yaml
 training:
   exp_name: tokenizer-simple
   seed: 233333
-  max_steps: 120000
+  max_steps: 300000
   disc_loss_momentum: 0.9
   use_gan_th: 0.025
   output_dir: output/tokenizer-simple

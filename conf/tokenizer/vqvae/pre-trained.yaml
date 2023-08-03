@@ -1,0 +1,4 @@
+class_path: pumt.tokenizer.from_pretrained
+init_args:
+  model: model.yaml
+  path: pre-trained/vqvae.ckpt

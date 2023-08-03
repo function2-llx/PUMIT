@@ -8,14 +8,14 @@ from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
-from pumt.conv import SpatialTensor
-from pumt.tokenizer.vqvae import VQVAEModel
+from pumt import sac
+from pumt.tokenizer import VQTokenizer
 
 src = Path('test-images/T0005.jpg')
 
 def main():
     parser = ArgumentParser()
-    parser.add_class_arguments(VQVAEModel, 'model')
+    parser.add_subclass_arguments(VQTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--out_path', type=Path)
     args = parser.parse_args()
@@ -28,10 +28,14 @@ def main():
     ])
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
-    x = SpatialTensor(x, 5)
-    model: VQVAEModel = args.model.cuda()
+    x = sac.SpatialTensor(x, 5)
+    model: VQTokenizer = args.model.cuda()
+    print(model.training)
 
-    load_ckpt(model, args.ckpt_path, state_dict_key='vqvae')
+    load_ckpt(model, args.ckpt_path, state_dict_key='model')
+    # load_ckpt(model, args.ckpt_path, state_dict_key='model')
+    # load_ckpt(model, args.ckpt_path, state_dict_key='state_dict')
+    print(model.quantize.mode)
     with torch.no_grad():
         x_rec, quant_out = model(x)
     print('output shape:', x_rec.shape)

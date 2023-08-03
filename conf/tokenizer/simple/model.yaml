@@ -5,7 +5,7 @@ init_args:
     init_args:
       num_embeddings: 4096
       embedding_dim: 512
-      mode: soft
+      mode: gumbel
   in_channels: 3
   start_stride: 4
   downsample_layer_channels: [128, 256, 512]

@@ -14,7 +14,6 @@ class VectorQuantizerOutput:
     z_q: torch.Tensor
     index: torch.Tensor
     loss: torch.Tensor
-    probs: torch.Tensor | None = None
     logits: torch.Tensor | None = None
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
@@ -25,9 +24,10 @@ class VectorQuantizer(nn.Module):
         embedding_dim: int,
         mode: Literal['nearest', 'gumbel', 'soft'],
         in_channels: int | None = None,
-        hard_gumbel: bool = True,
         beta: float = 0.25,
-        temperature: float = 1.,
+        hard_gumbel: bool = True,
+        t_min: float = 1e-6,
+        t_max: float = 0.9,
     ):
         super().__init__()
         self.mode = mode
@@ -42,16 +42,17 @@ class VectorQuantizer(nn.Module):
             self.proj = nn.Linear(in_channels, num_embeddings)
             if mode == 'gumbel':
                 self.hard_gumbel = hard_gumbel
-            self.temperature = temperature
+            self.t_min = t_min
+            self.t_max = t_max
+            self.temperature = 1.
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
 
     def adjust_temperature(self, global_step: int, max_steps: int):
-        # FIXME: why hard gumbel?
-        if self.mode == 'gumbel' and self.hard_gumbel:
-            t_min, t_max = 1e-6, 1.
-            self.temperature = t_min + 0.5 * (t_max - t_min) * (1 + np.cos(min(global_step / max_steps, 1.) * np.pi))
+        if self.mode == 'gumbel':
+            # cosine decay
+            self.temperature = self.t_min + 0.5 * (self.t_max - self.t_min) * (1 + np.cos(min(global_step / max_steps, 1.) * np.pi))
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if (weight := state_dict.pop(f'{prefix}embed.weight', None)) is not None:
@@ -81,23 +82,17 @@ class VectorQuantizer(nn.Module):
             z_q = channel_first(z_q).contiguous()
             return VectorQuantizerOutput(z_q, index, loss)
         else:
-            logits: torch.Tensor = self.proj(z) / self.temperature
+            logits: torch.Tensor = self.proj(z)
             probs = logits.softmax(dim=-1)
             entropy = einops.einsum(logits.log_softmax(dim=-1), probs, '... ne, ... ne -> ...')
             loss = entropy.mean()
-            if self.mode == 'gumbel':
-                if self.training:
-                    one_hot_prob = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
-                    index = one_hot_prob.argmax(dim=-1, keepdim=True)
-                    z_q = einops.einsum(one_hot_prob, self.embedding.weight, '... ne, ne d -> n ... d')
-                else:
-                    index = probs.argmax(dim=1)
-                    z_q = self.embedding(index)
+            if self.mode == 'gumbel' and self.training:
+                index_probs = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
             else:
-                index = probs
-                z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
+                index_probs = probs
+            z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index, loss, probs, logits)
+            return VectorQuantizerOutput(z_q, index_probs, loss, logits)
 
     def get_codebook_entry(self, index: torch.Tensor):
         if self.mode == 'soft':
