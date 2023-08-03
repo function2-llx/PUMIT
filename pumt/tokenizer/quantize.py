@@ -77,7 +77,7 @@ class VectorQuantizer(nn.Module):
         if self.rebuild_codebook:
             print('rebuild codebook')
             state_dict.pop(f'{prefix}embedding.weight')
-            state_dict.pop(f'{prefix}embedding.bias')
+            state_dict.pop(f'{prefix}proj.bias')
             state_dict.pop(proj_weight_key)
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
