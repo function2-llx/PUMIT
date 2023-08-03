@@ -29,6 +29,7 @@ class VectorQuantizer(nn.Module):
         hard_gumbel: bool = True,
         t_min: float = 1e-6,
         t_max: float = 0.9,
+        allow_rebuild: bool = False,
     ):
         super().__init__()
         self.mode = mode
@@ -47,6 +48,7 @@ class VectorQuantizer(nn.Module):
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
+        self.allow_rebuild = allow_rebuild
 
     @property
     def num_embeddings(self):
@@ -71,7 +73,7 @@ class VectorQuantizer(nn.Module):
                 state_dict[proj_weight_key] = weight.squeeze()
         elif self.mode != 'nearest' and (weight := state_dict.get(f'{prefix}embedding.weight')) is not None:
             # dot product as logit
-            state_dict[proj_weight_key] = einops.rearrange(weight, 'ne d -> ne d 1 1 1')
+            state_dict[proj_weight_key] = weight
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, z: torch.Tensor):

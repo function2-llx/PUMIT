@@ -3,7 +3,6 @@ from collections.abc import Sequence
 from torch import nn
 
 from luolib.models.init import init_common
-from luolib.models.layers import LayerNormNd
 from luolib.types import call_partial, partial_t, tuple3_t
 
 from pumt import sac
@@ -31,12 +30,21 @@ class SimpleVQTokenizer(VQTokenizer):
                 sac.InflatableConv3d(
                     in_channels if i == 0 else downsample_layer_channels[i - 1],
                     downsample_layer_channels[i],
-                    kernel_size=stride,
+                    kernel_size=stride if i == 0 else 3,
                     stride=stride,
                 ),
-                LayerNormNd(downsample_layer_channels[i]),
+                nn.GroupNorm(8, downsample_layer_channels[i]),
                 call_partial(encoder_act),
             ])
+        self.encoder.extend([
+            sac.InflatableConv3d(
+                downsample_layer_channels[-1],
+                downsample_layer_channels[-1],
+                kernel_size=3,
+            ),
+            nn.GroupNorm(8, downsample_layer_channels[-1]),
+            call_partial(encoder_act),
+        ])
 
         output_stride = start_stride << len(downsample_layer_channels) - 1 >> len(upsample_layer_channels) - 1
         self.decoder = nn.Sequential(
