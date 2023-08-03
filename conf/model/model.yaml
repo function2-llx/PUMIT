@@ -2,7 +2,7 @@ class_path: pumt.model.ViTForMIM
 init_args:
   patch_embed_grad_scale: 0.1
   pretrained_pos_embed_shape: [16, 16]
-  mask_ratio: 0.75
+  mask_ratio: 0.6
   optimizer:
     class_path: torch.optim.AdamW
     init_args:
