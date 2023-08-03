@@ -8,6 +8,7 @@ from lightning.pytorch.loggers import WandbLogger
 from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 import torch
 from torch import nn
+from torch.nn import functional as nnf
 from torch.utils import checkpoint
 from torchvision.utils import save_image
 
@@ -33,7 +34,6 @@ class ViTForMIM(ViT, LightningModule):
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
         plot_image_every_n_steps: int = 400,
-        temperature: float = 1.,
         eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):
@@ -50,7 +50,7 @@ class ViTForMIM(ViT, LightningModule):
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
         self.mim_head = nn.Linear(self.embed_dim, tokenizer.codebook_size)
-        self.mim_loss = nn.KLDivLoss(reduction='batchmean', log_target=True)
+        self.mim_loss = nn.CrossEntropyLoss()
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
@@ -66,7 +66,6 @@ class ViTForMIM(ViT, LightningModule):
             persistent=False,
         )
         self.plot_image_every_n_steps = plot_image_every_n_steps
-        self.temperature = temperature
         if eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
 
@@ -149,10 +148,18 @@ class ViTForMIM(ViT, LightningModule):
         masked_mask = hidden_states.new_ones(batch_size, seq_len, dtype=torch.bool).scatter(dim=1, index=visible_idx, value=False)
         masked_token_logits = self.mim_head(hidden_states[masked_mask])
         loss = self.mim_loss(
-            (masked_token_logits / self.temperature).log_softmax(dim=-1),
-            (token_logits[masked_mask] / self.temperature).log_softmax(dim=-1),
+            masked_token_logits,
+            token_logits[masked_mask].softmax(dim=-1),
         )
         self.log('train/loss', loss)
+        with torch.no_grad():
+            kld = nnf.kl_div(
+                masked_token_logits.log_softmax(dim=-1),
+                token_logits[masked_mask].log_softmax(dim=-1),
+                reduction='batchmean',
+                log_target=True,
+            )
+            self.log('train/kld', kld)
         if self.trainer.is_global_zero and (optimized_steps := self.global_step + 1) % self.plot_image_every_n_steps == 0:
             plot_dir = self.run_dir / 'plot' / f'step-{optimized_steps}'
             plot_dir.mkdir(parents=True)
