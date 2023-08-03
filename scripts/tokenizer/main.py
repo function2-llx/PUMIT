@@ -168,8 +168,8 @@ def main():
                 print(f'[rank {fabric.global_rank}] load tokenizer')
                 load_ckpt(model, ckpt)
             else:
-                model.load_state_dict(ckpt['model'])
-                loss_module.discriminator.load_state_dict(ckpt['discriminator'])
+                load_ckpt(model, ckpt, 'model')
+                load_ckpt(loss_module.discriminator, ckpt, 'discriminator')
     else:
         fabric.load(training_args.resume_ckpt_path, state)
         print(f'resumed from {training_args.resume_ckpt_path}')
