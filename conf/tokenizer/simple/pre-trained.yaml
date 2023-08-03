@@ -1,4 +1,4 @@
 class_path: pumt.tokenizer.from_pretrained
 init_args:
   model: model.yaml
-  path: pre-trained/simple.ckpt
+  path: pre-trained/simple-sharpen.ckpt
