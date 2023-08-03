@@ -42,8 +42,7 @@ class ViTForMIM(ViT, LightningModule):
         super().__init__(*args, **kwargs)
         assert tokenizer.stride == self.patch_embed.patch_size
         self.tokenizer = tokenizer
-        # TODO (or not to do): support nearest, gumbel
-        assert tokenizer.quantize.mode == 'soft'
+        assert tokenizer.quantize.mode in ['gumbel', 'soft']
         tokenizer.requires_grad_(False)
         tokenizer.eval()
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
