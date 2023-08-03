@@ -75,7 +75,7 @@ class ViTForMIM(ViT, LightningModule):
     def state_dict(self, *args, **kwargs):
         return {
             k: v for k, v in super().state_dict(*args, **kwargs).items()
-            if k.startswith('tokenizer.')
+            if not k.startswith('tokenizer.')
         }
 
     @cached_property
