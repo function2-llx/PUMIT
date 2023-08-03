@@ -15,6 +15,7 @@ class VectorQuantizerOutput:
     index: torch.Tensor
     loss: torch.Tensor
     logits: torch.Tensor | None = None
+    diversity: float = 0.
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
 class VectorQuantizer(nn.Module):
@@ -31,8 +32,6 @@ class VectorQuantizer(nn.Module):
     ):
         super().__init__()
         self.mode = mode
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
         in_channels = in_channels or embedding_dim
         if mode == 'nearest':
             self.beta = beta
@@ -48,6 +47,14 @@ class VectorQuantizer(nn.Module):
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
+
+    @property
+    def num_embeddings(self):
+        return self.embedding.num_embeddings
+
+    @property
+    def embedding_dim(self):
+        return self.embedding.embedding_dim
 
     def adjust_temperature(self, global_step: int, max_steps: int):
         if self.mode == 'gumbel':
@@ -91,8 +98,10 @@ class VectorQuantizer(nn.Module):
             else:
                 index_probs = probs
             z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
+            # https://github.com/pytorch/pytorch/issues/103142
+            diversity = sum([indexes.unique().numel() for indexes in probs.argmax(dim=-1)]) / np.prod(z_q.shape[:-1])
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index_probs, loss, logits)
+            return VectorQuantizerOutput(z_q, index_probs, loss, logits, diversity)
 
     def get_codebook_entry(self, index: torch.Tensor):
         if self.mode == 'soft':

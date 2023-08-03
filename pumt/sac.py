@@ -122,7 +122,7 @@ class InflatableConv3d(nn.Conv3d):
         stride = list(self.stride)
         padding = list(self.padding)
         stride[0] = max(self.stride[0] >> x.num_pending_hw_downsamples, 1)
-        if stride[0] == self.stride[0]:
+        if stride[0] == self.stride[0] and x.num_pending_hw_downsamples == 0:
             weight = self.weight
         else:
             padding[0] = 0

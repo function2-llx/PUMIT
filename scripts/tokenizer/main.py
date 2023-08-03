@@ -204,6 +204,7 @@ def main():
             max(disc_loss_ema, disc_loss_item) <= training_args.use_gan_th, model.get_ref_param(),
             fabric,
         )
+        log_dict['diversity'] = quant_out.diversity
         fabric.backward(loss)
         if training_args.max_norm_g is not None:
             fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)
