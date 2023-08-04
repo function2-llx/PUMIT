@@ -29,6 +29,7 @@ class ViTForMIM(ViT, LightningModule):
         self,
         *args,
         tokenizer: VQTokenizer,
+        tokenizer_eval: bool = True,
         mask_ratio: float,
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
@@ -44,7 +45,8 @@ class ViTForMIM(ViT, LightningModule):
         self.tokenizer = tokenizer
         assert tokenizer.quantize.mode in ['gumbel', 'soft']
         tokenizer.requires_grad_(False)
-        tokenizer.eval()
+        if tokenizer_eval:
+            tokenizer.eval()
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
