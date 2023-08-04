@@ -19,6 +19,6 @@ dl_conf:
   train_batch_size: 4
 trans_conf:
   train_tz: 3
-  train_tx: 14
+  train_tx: 10
   train_scale_x: [0.75, 2.0]
   isotropic_th: 1.5

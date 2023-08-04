@@ -54,6 +54,8 @@ class TrainingArguments:
     disc_loss_momentum: float = 0.9
     use_gan_th: float = 0.03
     benchmark: bool = False
+    pretrained_codebook: Path | None = None
+    fix_codebook: bool = False
 
 def get_parser():
     parser = ArgumentParser()
@@ -170,10 +172,15 @@ def main():
             else:
                 load_ckpt(model, ckpt, 'model')
                 load_ckpt(loss_module.discriminator, ckpt, 'discriminator')
+        if training_args.pretrained_codebook is not None:
+            model.quantize.load_state_dict(torch.load(training_args.pretrained_codebook))
+            print(f'load pre-trained codebook from {training_args.pretrained_codebook}')
     else:
         fabric.load(training_args.resume_ckpt_path, state)
         print(f'resumed from {training_args.resume_ckpt_path}')
         optimized_steps = state['step']
+    if training_args.fix_codebook:
+        model.quantize.requires_grad_(False)
 
     # setup model and optimizer after checkpoint loading, or optimizer.param_groups[i] will be different object
     model, optimizer_g = fabric.setup(model, optimizer_g)
