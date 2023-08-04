@@ -37,6 +37,24 @@ class SimpleVQTokenizer(VQTokenizer):
                 LayerNormNd(downsample_layer_channels[i]),
                 call_partial(encoder_act),
             ])
+        self.encoder.extend([
+            sac.InflatableConv3d(
+                downsample_layer_channels[-1],
+                downsample_layer_channels[-1],
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.GroupNorm(8, downsample_layer_channels[-1]),
+            call_partial(encoder_act),
+            sac.InflatableConv3d(
+                downsample_layer_channels[-1],
+                self.quantize.proj.in_features,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.GroupNorm(8, downsample_layer_channels[-1]),
+            call_partial(encoder_act),
+        ])
 
         output_stride = start_stride << len(downsample_layer_channels) - 1 >> len(upsample_layer_channels) - 1
         self.decoder = nn.Sequential(
