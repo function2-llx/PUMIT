@@ -52,7 +52,7 @@ class SimpleVQTokenizer(VQTokenizer):
                 kernel_size=3,
                 padding=1,
             ),
-            nn.GroupNorm(8, downsample_layer_channels[-1]),
+            nn.GroupNorm(8, self.quantize.proj.in_features),
             nn.LeakyReLU(inplace=True),
         ])
 
