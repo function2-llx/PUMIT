@@ -1,4 +1,4 @@
-from .vqvae import VQVAEModel, VQGAN
+from .vqvae import VQVAEModel
 from .discriminator import PatchDiscriminator
 from .loss import VQGANLoss
 from .simple import SimpleVQTokenizer
