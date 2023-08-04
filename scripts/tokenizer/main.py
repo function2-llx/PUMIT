@@ -241,7 +241,8 @@ def main():
         optimized_steps = step + 1
         if optimized_steps % training_args.log_every_n_steps == 0 or optimized_steps == training_args.max_steps:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
-            fabric.log('train/temperature', model.quantize.temperature,  optimized_steps)
+            if model.quantize.mode == 'gumbel':
+                fabric.log('train/temperature', model.quantize.temperature,  optimized_steps)
         if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
             step_save_dir = img_save_dir / f'step-{optimized_steps}'
             step_save_dir.mkdir(parents=True)
