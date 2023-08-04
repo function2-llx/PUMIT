@@ -342,149 +342,149 @@ class VQVAEModel(VQTokenizer):
     def get_ref_param(self) -> nn.Parameter | None:
         return self.decoder.conv_out.weight
 
-class VQGAN(VQVAEModel, LightningModule):
-    def __init__(
-        self,
-        z_channels: int,
-        embedding_dim: int,
-        ed_kwargs: dict,
-        vq_kwargs: dict,
-        loss_kwargs: dict,
-        optimizer: dict | None = None,
-        lr_scheduler_config: LRSchedulerConfig | None = None,
-        disc_optimizer: dict | None = None,
-        disc_lr_scheduler_config: LRSchedulerConfig | None = None,
-        ckpt_path: Path | None = None,
-    ):
-        VQVAEModel.__init__(self, z_channels, embedding_dim, ed_kwargs, vq_kwargs)
-        LightningModule.__init__(self)
-        self.loss = VQGANLoss(**loss_kwargs)
-        self.optimizer = optimizer
-        self.lr_scheduler_config = lr_scheduler_config
-        self.disc_optimizer = disc_optimizer
-        self.disc_lr_scheduler_config = disc_lr_scheduler_config
-        load_ckpt(self, ckpt_path)
-        self.automatic_optimization = False
-
-    def log_dict_split(self, data: dict, split: str, batch_size: int | None = None):
-        self.log_dict({f'{split}/{k}': v for k, v in data.items()}, batch_size=batch_size, sync_dist=True)
-
-    def lr_scheduler_step(self, *args, **kwargs) -> None:
-        # make lightning happy with the incompatible API: https://github.com/Lightning-AI/lightning/issues/18074
-        pass
-
-    def configure_optimizers(self):
-        decay_keys, no_decay_keys = split_weight_decay_keys(self)
-        optimizer = instantiate_class(
-            create_param_groups(
-                [
-                    (name, param)
-                    for child_name, child in self.named_children() if child_name != 'loss'
-                    for name, param in child.named_parameters(prefix=child_name) if param.requires_grad
-                ],
-                decay_keys,
-                no_decay_keys,
-            ),
-            self.optimizer,
-        )
-        disc_optimizer = instantiate_class(
-            create_param_groups(
-                [
-                    (name, param)
-                    for name, param in self.loss.named_parameters(prefix='loss') if param.requires_grad
-                ],
-                decay_keys,
-                no_decay_keys,
-            ),
-            self.disc_optimizer,
-        )
-        from timm.scheduler.scheduler import Scheduler as TIMMScheduler
-        def instantiate_and_check(config: LRSchedulerConfig, optimizer):
-            config = copy(config)
-            config.scheduler = instantiate_class(optimizer, config.scheduler)
-            assert isinstance(config.scheduler, TIMMScheduler)
-            assert config.interval == 'step'
-            return vars(config)
-
-        return [optimizer, disc_optimizer], [
-            instantiate_and_check(self.lr_scheduler_config, optimizer),
-            instantiate_and_check(self.disc_lr_scheduler_config, disc_optimizer)
-        ]
-
-    def on_fit_start(self) -> None:
-        from lightning.pytorch.loops import _TrainingEpochLoop
-        class MyTrainingEpochLoop(_TrainingEpochLoop):
-            @property
-            def global_step(self):
-                # https://github.com/Lightning-AI/lightning/issues/17958
-                return super().global_step // 2
-        self.trainer.fit_loop.epoch_loop.__class__ = MyTrainingEpochLoop
-
-    def on_train_batch_start(self, *args, **kwargs):
-        for config in self.trainer.lr_scheduler_configs:
-            if self.global_step % config.frequency == 0:
-                config.scheduler.step_update(self.global_step)
-
-    def configure_gradient_clipping(self, optimizer, *args, **kwargs) -> None:
-        self.clip_gradients(optimizer, 1, 'norm')
-
-    def training_step(self, batch: list[dict], *args, **kwargs):
-        optimizer, disc_optimizer = self.optimizers()
-        optimizer.zero_grad()
-        disc_optimizer.zero_grad()
-        if self.quantize.mode == 'gumbel' and not self.quantize.hard_gumbel:
-            self.quantize.adjust_temperature(self.global_step, self.trainer.max_steps)
-        batch_size = len(batch)
-        batch_log_dict = None
-        batch_loss, batch_disc_loss = None, None
-        for sample in batch:
-            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
-            x = x[None]
-            spacing = spacing[None]
-            self.toggle_optimizer(optimizer)
-            x_rec, quant_out = self(x, spacing)
-            self.loss.adjust_gan_weight(self.global_step)
-            loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
-            if batch_loss is None:
-                batch_loss = loss
-            else:
-                batch_loss += loss
-            self.untoggle_optimizer(optimizer)
-            self.toggle_optimizer(disc_optimizer)
-            disc_loss = self.loss.forward_disc(x, x_rec, spacing, log_dict)
-            if batch_disc_loss is None:
-                batch_disc_loss = disc_loss
-            else:
-                batch_disc_loss += disc_loss
-            self.untoggle_optimizer(disc_optimizer)
-            if batch_log_dict is None:
-                batch_log_dict = log_dict
-            else:
-                for k, v in log_dict.items():
-                    batch_log_dict[k] += v
-        self.manual_backward(batch_loss)
-        self.manual_backward(batch_disc_loss)
-        optimizer.step()
-        disc_optimizer.step()
-        for k in batch_log_dict:
-            batch_log_dict[k] /= batch_size
-        self.log_dict_split(batch_log_dict, 'train', len(batch))
-
-    def validation_step(self, batch: list[dict], *args, **kwargs):
-        batch_size = len(batch)
-        batch_log_dict = None
-        for sample in batch:
-            x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
-            x = x[None]
-            spacing = spacing[None]
-            x_rec, quant_out = self(x, spacing)
-            loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
-            self.loss.forward_disc(x, x_rec, spacing, log_dict)
-            if batch_log_dict is None:
-                batch_log_dict = log_dict
-            else:
-                for k, v in log_dict.items():
-                    batch_log_dict[k] += v
-        for k in batch_log_dict:
-            batch_log_dict[k] /= batch_size
-        self.log_dict_split(batch_log_dict, 'val', len(batch))
+# class VQGAN(VQVAEModel, LightningModule):
+#     def __init__(
+#         self,
+#         z_channels: int,
+#         embedding_dim: int,
+#         ed_kwargs: dict,
+#         vq_kwargs: dict,
+#         loss_kwargs: dict,
+#         optimizer: dict | None = None,
+#         lr_scheduler_config: LRSchedulerConfig | None = None,
+#         disc_optimizer: dict | None = None,
+#         disc_lr_scheduler_config: LRSchedulerConfig | None = None,
+#         ckpt_path: Path | None = None,
+#     ):
+#         VQVAEModel.__init__(self, z_channels, embedding_dim, ed_kwargs, vq_kwargs)
+#         LightningModule.__init__(self)
+#         self.loss = VQGANLoss(**loss_kwargs)
+#         self.optimizer = optimizer
+#         self.lr_scheduler_config = lr_scheduler_config
+#         self.disc_optimizer = disc_optimizer
+#         self.disc_lr_scheduler_config = disc_lr_scheduler_config
+#         load_ckpt(self, ckpt_path)
+#         self.automatic_optimization = False
+#
+#     def log_dict_split(self, data: dict, split: str, batch_size: int | None = None):
+#         self.log_dict({f'{split}/{k}': v for k, v in data.items()}, batch_size=batch_size, sync_dist=True)
+#
+#     def lr_scheduler_step(self, *args, **kwargs) -> None:
+#         # make lightning happy with the incompatible API: https://github.com/Lightning-AI/lightning/issues/18074
+#         pass
+#
+#     def configure_optimizers(self):
+#         decay_keys, no_decay_keys = split_weight_decay_keys(self)
+#         optimizer = instantiate_class(
+#             create_param_groups(
+#                 [
+#                     (name, param)
+#                     for child_name, child in self.named_children() if child_name != 'loss'
+#                     for name, param in child.named_parameters(prefix=child_name) if param.requires_grad
+#                 ],
+#                 decay_keys,
+#                 no_decay_keys,
+#             ),
+#             self.optimizer,
+#         )
+#         disc_optimizer = instantiate_class(
+#             create_param_groups(
+#                 [
+#                     (name, param)
+#                     for name, param in self.loss.named_parameters(prefix='loss') if param.requires_grad
+#                 ],
+#                 decay_keys,
+#                 no_decay_keys,
+#             ),
+#             self.disc_optimizer,
+#         )
+#         from timm.scheduler.scheduler import Scheduler as TIMMScheduler
+#         def instantiate_and_check(config: LRSchedulerConfig, optimizer):
+#             config = copy(config)
+#             config.scheduler = instantiate_class(optimizer, config.scheduler)
+#             assert isinstance(config.scheduler, TIMMScheduler)
+#             assert config.interval == 'step'
+#             return vars(config)
+#
+#         return [optimizer, disc_optimizer], [
+#             instantiate_and_check(self.lr_scheduler_config, optimizer),
+#             instantiate_and_check(self.disc_lr_scheduler_config, disc_optimizer)
+#         ]
+#
+#     def on_fit_start(self) -> None:
+#         from lightning.pytorch.loops import _TrainingEpochLoop
+#         class MyTrainingEpochLoop(_TrainingEpochLoop):
+#             @property
+#             def global_step(self):
+#                 # https://github.com/Lightning-AI/lightning/issues/17958
+#                 return super().global_step // 2
+#         self.trainer.fit_loop.epoch_loop.__class__ = MyTrainingEpochLoop
+#
+#     def on_train_batch_start(self, *args, **kwargs):
+#         for config in self.trainer.lr_scheduler_configs:
+#             if self.global_step % config.frequency == 0:
+#                 config.scheduler.step_update(self.global_step)
+#
+#     def configure_gradient_clipping(self, optimizer, *args, **kwargs) -> None:
+#         self.clip_gradients(optimizer, 1, 'norm')
+#
+#     def training_step(self, batch: list[dict], *args, **kwargs):
+#         optimizer, disc_optimizer = self.optimizers()
+#         optimizer.zero_grad()
+#         disc_optimizer.zero_grad()
+#         if self.quantize.mode == 'gumbel' and not self.quantize.hard_gumbel:
+#             self.quantize.adjust_temperature(self.global_step, self.trainer.max_steps)
+#         batch_size = len(batch)
+#         batch_log_dict = None
+#         batch_loss, batch_disc_loss = None, None
+#         for sample in batch:
+#             x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
+#             x = x[None]
+#             spacing = spacing[None]
+#             self.toggle_optimizer(optimizer)
+#             x_rec, quant_out = self(x, spacing)
+#             self.loss.adjust_gan_weight(self.global_step)
+#             loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
+#             if batch_loss is None:
+#                 batch_loss = loss
+#             else:
+#                 batch_loss += loss
+#             self.untoggle_optimizer(optimizer)
+#             self.toggle_optimizer(disc_optimizer)
+#             disc_loss = self.loss.forward_disc(x, x_rec, spacing, log_dict)
+#             if batch_disc_loss is None:
+#                 batch_disc_loss = disc_loss
+#             else:
+#                 batch_disc_loss += disc_loss
+#             self.untoggle_optimizer(disc_optimizer)
+#             if batch_log_dict is None:
+#                 batch_log_dict = log_dict
+#             else:
+#                 for k, v in log_dict.items():
+#                     batch_log_dict[k] += v
+#         self.manual_backward(batch_loss)
+#         self.manual_backward(batch_disc_loss)
+#         optimizer.step()
+#         disc_optimizer.step()
+#         for k in batch_log_dict:
+#             batch_log_dict[k] /= batch_size
+#         self.log_dict_split(batch_log_dict, 'train', len(batch))
+#
+#     def validation_step(self, batch: list[dict], *args, **kwargs):
+#         batch_size = len(batch)
+#         batch_log_dict = None
+#         for sample in batch:
+#             x, spacing = cytoolz.get([DataKey.IMG, DataKey.SPACING], sample)
+#             x = x[None]
+#             spacing = spacing[None]
+#             x_rec, quant_out = self(x, spacing)
+#             loss, log_dict = self.loss.forward_gen(x, x_rec, spacing, quant_out.loss)
+#             self.loss.forward_disc(x, x_rec, spacing, log_dict)
+#             if batch_log_dict is None:
+#                 batch_log_dict = log_dict
+#             else:
+#                 for k, v in log_dict.items():
+#                     batch_log_dict[k] += v
+#         for k in batch_log_dict:
+#             batch_log_dict[k] /= batch_size
+#         self.log_dict_split(batch_log_dict, 'val', len(batch))

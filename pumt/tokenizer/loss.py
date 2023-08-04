@@ -8,6 +8,7 @@ from torch import nn
 from pumt import sac
 from .discriminator import PatchDiscriminatorBase
 from .lpips import LPIPS
+from .quantize import VectorQuantizerOutput
 
 @torch.no_grad()
 def calculate_adaptive_weight(
@@ -36,6 +37,7 @@ class VQGANLoss(nn.Module):
     def __init__(
         self,
         quant_weight: float,
+        entropy_weight: float,
         discriminator: PatchDiscriminatorBase,
         rec_loss: Literal['l1', 'l2'] = 'l1',
         rec_weight: float = 1.0,
@@ -46,6 +48,7 @@ class VQGANLoss(nn.Module):
     ):
         super().__init__()
         self.quant_weight = quant_weight
+        self.entropy_weight = entropy_weight
         self.rec_weight = rec_weight
         match rec_loss:
             case 'l1':
@@ -90,7 +93,7 @@ class VQGANLoss(nn.Module):
         self,
         x: sac.SpatialTensor,
         x_rec: sac.SpatialTensor,
-        quant_loss: torch.Tensor,
+        vq_out: VectorQuantizerOutput,
         use_gan_loss: bool,
         ref_param: nn.Parameter | None = None,
         fabric: Fabric | None = None,
@@ -113,7 +116,9 @@ class VQGANLoss(nn.Module):
             )
         else:
             perceptual_loss = torch.zeros_like(rec_loss)
-        vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * quant_loss
+        vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * vq_out.loss
+        if vq_out.entropy is not None:
+            vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
 
         score_fake = self.discriminator(x_rec)
         gan_loss = -score_fake.mean()
@@ -129,15 +134,19 @@ class VQGANLoss(nn.Module):
         else:
             gan_weight = 0
         loss = vq_loss + gan_weight * gan_loss
-        return loss, {
+        log_dict =  {
             'loss': loss,
             'rec_loss': rec_loss,
             'perceptual_loss': perceptual_loss,
-            'quant_loss': quant_loss,
+            'quant_loss': vq_out.loss,
             'vq_loss': vq_loss,
             'gan_loss': gan_loss,
             'gan_weight': gan_weight,
         }
+        if vq_out.entropy is not None:
+            log_dict['entropy'] = vq_out.entropy
+            log_dict['diversity'] = vq_out.diversity
+        return loss, log_dict
 
     def forward_disc(self, x: sac.SpatialTensor, x_rec: sac.SpatialTensor, log_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict]:
         score_real = self.discriminator(x.detach())

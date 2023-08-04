@@ -1,4 +1,5 @@
 quant_weight: 1.
+entropy_weight: 0.2
 discriminator:
   class_path: pumt.tokenizer.discriminator.SimplePatchDiscriminator
   init_args:

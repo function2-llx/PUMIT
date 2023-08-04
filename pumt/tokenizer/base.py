@@ -42,9 +42,9 @@ class VQTokenizer(ABC, nn.Module):
 
     def forward(self, x: sac.SpatialTensor, fabric: Fabric | None = None) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:
         z = self.encode(x)
-        quant_out: VectorQuantizerOutput = self.quantize(z, fabric)
-        x_rec = self.decode(quant_out.z_q)
-        return x_rec, quant_out
+        vq_out: VectorQuantizerOutput = self.quantize(z, fabric)
+        x_rec = self.decode(vq_out.z_q)
+        return x_rec, vq_out
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if self.is_pretrained:
