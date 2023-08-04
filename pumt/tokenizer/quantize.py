@@ -13,7 +13,7 @@ from luolib.utils import channel_first, channel_last
 class VectorQuantizerOutput:
     z_q: torch.Tensor
     index: torch.Tensor
-    loss: torch.Tensor
+    loss: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     diversity: float = 0.
 
@@ -29,7 +29,6 @@ class VectorQuantizer(nn.Module):
         hard_gumbel: bool = True,
         t_min: float = 1e-6,
         t_max: float = 0.9,
-        rebuild_codebook: bool = False,
     ):
         super().__init__()
         self.mode = mode
@@ -42,13 +41,12 @@ class VectorQuantizer(nn.Module):
             self.proj = nn.Linear(in_channels, num_embeddings)
             if mode == 'gumbel':
                 self.hard_gumbel = hard_gumbel
-            self.t_min = t_min
-            self.t_max = t_max
-            self.temperature = 1.
+                self.t_min = t_min
+                self.t_max = t_max
+                self.temperature = 1.
 
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
-        self.rebuild_codebook = rebuild_codebook
 
     @property
     def num_embeddings(self):
@@ -74,11 +72,6 @@ class VectorQuantizer(nn.Module):
         elif self.mode != 'nearest' and (weight := state_dict.get(f'{prefix}embedding.weight')) is not None:
             # dot product as logit
             state_dict[proj_weight_key] = weight
-        if self.rebuild_codebook:
-            print('rebuild codebook')
-            state_dict.pop(f'{prefix}embedding.weight')
-            state_dict.pop(f'{prefix}proj.bias')
-            state_dict.pop(proj_weight_key)
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, z: torch.Tensor):
@@ -104,7 +97,7 @@ class VectorQuantizer(nn.Module):
                 index_probs = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
             else:
                 index_probs = probs
-            z_q = einops.einsum(probs, self.embedding.weight, '... ne, ne d -> ... d')
+            z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')
             # https://github.com/pytorch/pytorch/issues/103142
             diversity = sum([indexes.unique().numel() for indexes in probs.argmax(dim=-1)]) / np.prod(z_q.shape[:-1])
             z_q = channel_first(z_q).contiguous()
