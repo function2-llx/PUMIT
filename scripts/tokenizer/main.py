@@ -204,7 +204,7 @@ def main():
         x = 2 * x - 1
         x = sac.SpatialTensor(x, aniso_d)
         model.quantize.adjust_temperature(step, training_args.max_steps)
-        x_rec, quant_out = model(x)
+        x_rec, quant_out = model.forward(x)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
             x, x_rec, quant_out.loss,
@@ -212,6 +212,8 @@ def main():
             fabric,
         )
         log_dict['diversity'] = quant_out.diversity
+        if quant_out.entropy is not None:
+            log_dict['entropy'] = quant_out.entropy
         fabric.backward(loss)
         if training_args.max_norm_g is not None:
             fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import einops
 from jsonargparse import class_from_function
+from lightning import Fabric
 import torch
 from torch import nn
 
@@ -39,9 +40,9 @@ class VQTokenizer(ABC, nn.Module):
     def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
         pass
 
-    def forward(self, x: sac.SpatialTensor) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:
+    def forward(self, x: sac.SpatialTensor, fabric: Fabric | None = None) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:
         z = self.encode(x)
-        quant_out: VectorQuantizerOutput = self.quantize(z)
+        quant_out: VectorQuantizerOutput = self.quantize(z, fabric)
         x_rec = self.decode(quant_out.z_q)
         return x_rec, quant_out
 

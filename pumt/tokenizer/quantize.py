@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import einops
+from lightning import Fabric
 import numpy as np
 import torch
 from torch import nn
@@ -13,9 +14,10 @@ from luolib.utils import channel_first, channel_last
 class VectorQuantizerOutput:
     z_q: torch.Tensor
     index: torch.Tensor
-    loss: torch.Tensor | None = None
+    loss: torch.Tensor
+    diversity: float
     logits: torch.Tensor | None = None
-    diversity: float = 0.
+    entropy: torch.Tensor | None = None
 
 # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
 class VectorQuantizer(nn.Module):
@@ -74,7 +76,7 @@ class VectorQuantizer(nn.Module):
             state_dict[proj_weight_key] = weight
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def forward(self, z: torch.Tensor):
+    def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
         z = channel_last(z).contiguous()
         if self.mode == 'nearest':
             # distances from z to embeddings, exclude |z|^2
@@ -86,22 +88,27 @@ class VectorQuantizer(nn.Module):
             # preserve gradients
             z_q = z + (z_q - z).detach()
             # reshape back to match original input shape
+            diversity = sum([i.unique().numel() for i in index]) / np.prod(z_q.shape[:-1])
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index, loss)
+            return VectorQuantizerOutput(z_q, index, loss, diversity)
         else:
             logits: torch.Tensor = self.proj(z)
             probs = logits.softmax(dim=-1)
-            entropy = einops.einsum(logits.log_softmax(dim=-1), probs, '... ne, ... ne -> ...')
-            loss = entropy.mean()
+            mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
+            if self.training:
+                # don't use all_reduce: https://github.com/Lightning-AI/lightning/issues/18228
+                mean_probs = fabric.all_gather(mean_probs).mean(dim=0) - mean_probs.detach() + mean_probs
+            loss = (mean_probs * mean_probs.log()).sum()
+            entropy = -einops.einsum(probs, logits.log_softmax(dim=-1), '... ne, ... ne -> ...').mean()
             if self.mode == 'gumbel' and self.training:
                 index_probs = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
             else:
                 index_probs = probs
             z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')
             # https://github.com/pytorch/pytorch/issues/103142
-            diversity = sum([indexes.unique().numel() for indexes in probs.argmax(dim=-1)]) / np.prod(z_q.shape[:-1])
+            diversity = sum([i.unique().numel() for i in probs.argmax(dim=-1)]) / np.prod(z_q.shape[:-1])
             z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index_probs, loss, logits, diversity)
+            return VectorQuantizerOutput(z_q, index_probs, loss, diversity, logits, entropy)
 
     def get_codebook_entry(self, index: torch.Tensor):
         if self.mode == 'soft':

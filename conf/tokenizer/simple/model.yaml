@@ -3,9 +3,9 @@ init_args:
   quantize:
     class_path: pumt.tokenizer.VectorQuantizer
     init_args:
-      num_embeddings: 16384
+      num_embeddings: 4096
       embedding_dim: 512
-      mode: gumbel
+      mode: soft
   in_channels: 3
   start_stride: 4
   downsample_layer_channels: [128, 256, 512]
