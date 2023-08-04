@@ -58,18 +58,14 @@ class SimpleVQTokenizer(VQTokenizer):
 
         output_stride = start_stride << len(downsample_layer_channels) - 1 >> len(upsample_layer_channels) - 1
         self.decoder = nn.Sequential(
-            nn.Sequential(
-                sac.InflatableConv3d(self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1),
-                nn.GroupNorm(8, upsample_layer_channels[-1]),
-                nn.LeakyReLU(inplace=True),
+            sac.InflatableConv3d(self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1),
+            nn.GroupNorm(8, upsample_layer_channels[-1]),
+            nn.LeakyReLU(inplace=True),
+            sac.InflatableConv3d(
+                self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1
             ),
-            nn.Sequential(
-                sac.InflatableConv3d(
-                    self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1
-                ),
-                nn.GroupNorm(8, upsample_layer_channels[-1]),
-                nn.LeakyReLU(inplace=True),
-            ),
+            nn.GroupNorm(8, upsample_layer_channels[-1]),
+            nn.LeakyReLU(inplace=True),
             *[
                 sac.AdaptiveTransposedConvUpsample(upsample_layer_channels[i + 1], upsample_layer_channels[i], 2)
                 for i in reversed(range(len(upsample_layer_channels) - 1))
