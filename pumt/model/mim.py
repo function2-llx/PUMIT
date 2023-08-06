@@ -45,6 +45,7 @@ class ViTForMIM(ViT, LightningModule):
         self.tokenizer = tokenizer
         assert tokenizer.quantize.mode in ['gumbel', 'soft']
         tokenizer.requires_grad_(False)
+        self.tokenizer_eval = tokenizer_eval
         if tokenizer_eval:
             tokenizer.eval()
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
@@ -69,6 +70,10 @@ class ViTForMIM(ViT, LightningModule):
         self.plot_image_every_n_steps = plot_image_every_n_steps
         if eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.tokenizer.train(not self.tokenizer_eval)
 
     def input_norm(self, x: sac.SpatialTensor):
         return (x - self.input_norm_mean) / self.input_norm_std

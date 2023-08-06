@@ -91,10 +91,9 @@ class SpatialTensor(torch.Tensor):
 class InflatableConv3d(nn.Conv3d):
     def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
         super().__init__(*args, **kwargs)
+        assert self.stride[0] == self.stride[1] == self.stride[2], 'only support isotropic stride'
         assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
-        assert self.stride[1] == self.stride[2], 'only support stride_h == stride_w'
-        assert self.stride[1] & self.stride[1] - 1 == 0, 'only support power of 2'
-        self.num_downsamples = self.stride[1].bit_length() - 1
+        self.num_downsamples = self.stride[0].bit_length() - 1
         assert self.padding_mode == 'zeros'
         assert d_inflation in ['average', 'center']
         self.inflation = d_inflation
