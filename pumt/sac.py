@@ -126,7 +126,7 @@ class InflatableConv3d(nn.Conv3d):
         else:
             padding[0] = 0
             if stride[0] == 1:
-                assert self.kernel_size[0] == 3, "don't do this or teach me how to do this /kl"
+                assert self.stride[0] == self.kernel_size[0] or self.kernel_size[0] == 3, "don't do this or teach me how to do this /kl"
                 weight = self.weight.sum(dim=2, keepdim=True)
             else:
                 assert self.stride[0] == self.kernel_size[0], "don't do this or teach me how to do this /kl"
