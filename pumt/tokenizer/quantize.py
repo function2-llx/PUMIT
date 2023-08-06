@@ -97,7 +97,8 @@ class VectorQuantizer(nn.Module):
             mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
             if self.training:
                 # don't use all_reduce: https://github.com/Lightning-AI/lightning/issues/18228
-                mean_probs = fabric.all_gather(mean_probs).mean(dim=0) - mean_probs.detach() + mean_probs
+                detached = mean_probs.detach()
+                mean_probs = fabric.all_gather(detached).mean(dim=0) - detached + mean_probs
             loss = (mean_probs * mean_probs.log()).sum()
             entropy = -einops.einsum(probs, logits.log_softmax(dim=-1), '... ne, ... ne -> ...').mean()
             if self.mode == 'gumbel' and self.training:
