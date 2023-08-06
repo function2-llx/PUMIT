@@ -8,7 +8,7 @@ init_args:
     init_args:
       lr: 1e-4
       weight_decay: 5e-2
-      betas: [0.9, 0.99]
+#      betas: [0.9, 0.99]
   lr_scheduler:
     scheduler:
       class_path: timm.scheduler.CosineLRScheduler
