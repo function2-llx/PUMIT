@@ -40,7 +40,7 @@ class Fabric(LightningFabric):
 class TrainingArguments:
     max_steps: int
     seed: int = 42
-    log_every_n_steps: int = 10
+    log_every_n_steps: int = 50
     save_last_every_n_steps: int = 1000
     plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000

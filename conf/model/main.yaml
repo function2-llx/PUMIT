@@ -11,7 +11,7 @@ trainer:
       project: PUMT-MIM
   val_check_interval: 100
   check_val_every_n_epoch: null
-  log_every_n_steps: 10
+  log_every_n_steps: 50
   benchmark: true
   use_distributed_sampler: false
   callbacks:
