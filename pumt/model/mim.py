@@ -51,7 +51,12 @@ class ViTForMIM(ViT, LightningModule):
         self.mask_token = NoWeightDecayParameter(torch.empty(1, 1, self.embed_dim))
         self.mask_ratio = mask_ratio
         self.mask_layer_ids = set(mask_layer_ids)
-        self.mim_head = nn.Linear(self.embed_dim, tokenizer.codebook_size)
+        self.mim_head = nn.Sequential(
+            nn.Linear(self.embed_dim, self.embed_dim),
+            nn.GELU(),
+            nn.Linear(self.embed_dim, tokenizer.codebook_size),
+        )
+
         self.mim_loss = nn.CrossEntropyLoss()
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
@@ -113,7 +118,7 @@ class ViTForMIM(ViT, LightningModule):
         ).scatter_(dim=1, index=visible_idx, src=x.gather(dim=1, index=visible_idx))
         for i, block in enumerate(self.blocks):
             x_layer = x if i in self.mask_layer_ids else x.gather(dim=1, index=visible_idx)
-            if self.grad_ckpt:
+            if self.training and self.grad_ckpt:
                 x_layer = checkpoint.checkpoint(block, x_layer)
             else:
                 x_layer = block(x_layer)
