@@ -23,3 +23,9 @@ init_args:
       - [1, 2, 2]
       - [1, 2, 2]
   seg_feature_channels: [32, 64, 128, 256]
+  loss:
+    class_path: monai.losses.DiceCELoss
+    init_args:
+      include_background: true
+      to_onehot_y: true
+      softmax: true
