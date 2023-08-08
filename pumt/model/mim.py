@@ -22,8 +22,8 @@ from pumt.tokenizer import VQTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):
-    input_norm_mean: torch.Tensor
-    input_norm_std: torch.Tensor
+    # input_norm_mean: torch.Tensor
+    # input_norm_std: torch.Tensor
 
     def __init__(
         self,
@@ -81,7 +81,7 @@ class ViTForMIM(ViT, LightningModule):
         self.tokenizer.train(not self.tokenizer_eval)
 
     def input_norm(self, x: sac.SpatialTensor):
-        return (x - self.input_norm_mean) / self.input_norm_std
+        return nnf.instance_norm(x)
 
     def state_dict(self, *args, **kwargs):
         return {
@@ -193,3 +193,18 @@ class ViTForMIM(ViT, LightningModule):
                 save_image(x_rec[0, :, i], plot_dir / f'{i}-rec.png')
                 save_image(mim_x_rec[0, :, i], plot_dir / f'{i}-mim-rec.png')
         return loss
+
+    def on_before_optimizer_step(self, *args, **kwargs):
+        def grad_norm(m: nn.Module):
+            norm = 0.
+            for p in m.parameters():
+                if p.grad is not None:
+                    grad = p.grad.detach().flatten()
+                    norm += torch.dot(grad, grad)
+            return norm ** 0.5
+
+        self.log('grad-norm/patch_embed', grad_norm(self.patch_embed))
+        for i, block in enumerate(self.blocks):
+            self.log(f'grad-norm/block-{i}', grad_norm(block))
+        self.log('grad-norm/mim_head', grad_norm(self.mim_head))
+        self.log('grad-norm/total', grad_norm(self))
