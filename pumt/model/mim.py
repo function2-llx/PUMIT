@@ -35,7 +35,7 @@ class ViTForMIM(ViT, LightningModule):
         mask_layer_ids: Sequence[int],
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
-        plot_image_every_n_steps: int = 400,
+        plot_image_every_n_steps: int = 500,
         eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):

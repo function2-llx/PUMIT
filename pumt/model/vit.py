@@ -22,8 +22,7 @@ class PatchEmbed(nn.Module):
         super().__init__()
         self.patch_size: tuple3_t[int] = ensure_tuple_rep(patch_size, 3)
         self.adaptive = adaptive
-        conv_t = sac.InflatableInputConv3d if adaptive else nn.Conv3d
-        self.proj = conv_t(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = sac.InflatableInputConv3d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size, adaptive=adaptive)
         self.flatten = flatten
 
     def forward(self, x: torch.Tensor, flatten: bool | None = None) -> torch.Tensor:
@@ -239,7 +238,7 @@ class ViT(nn.Module):
         self.rope.prepare(shape)
         states = []
         for block in self.blocks:
-            if self.grad_ckpt:
+            if self.training and self.grad_ckpt:
                 x = checkpoint.checkpoint(block, x)
             else:
                 x = block(x)

@@ -1,11 +1,9 @@
 from pathlib import Path
 
 import nibabel as nib
-import numpy as np
 import torch
 
 from monai import transforms as mt
-from monai.transforms import allclose
 from monai.utils import ImageMetaKey
 
 from downstream.chaos.data import read_label

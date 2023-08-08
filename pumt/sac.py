@@ -89,14 +89,16 @@ class SpatialTensor(torch.Tensor):
         return self.as_subclass(torch.Tensor)
 
 class InflatableConv3d(nn.Conv3d):
-    def __init__(self, *args, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
+    def __init__(self, *args, adaptive: bool = True, d_inflation: Literal['average', 'center'] = 'average', **kwargs):
         super().__init__(*args, **kwargs)
-        assert self.stride[0] == self.stride[1] == self.stride[2], 'only support isotropic stride'
-        assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
-        self.num_downsamples = self.stride[0].bit_length() - 1
-        assert self.padding_mode == 'zeros'
-        assert d_inflation in ['average', 'center']
-        self.inflation = d_inflation
+        self.adaptive = adaptive
+        if adaptive:
+            assert self.stride[0] == self.stride[1] == self.stride[2], 'only support isotropic stride'
+            assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
+            self.num_downsamples = self.stride[0].bit_length() - 1
+            assert self.padding_mode == 'zeros'
+            assert d_inflation in ['average', 'center']
+            self.inflation = d_inflation
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         weight_key = f'{prefix}weight'
@@ -117,28 +119,32 @@ class InflatableConv3d(nn.Conv3d):
             state_dict[weight_key] = weight
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def forward(self, x: SpatialTensor):
-        stride = list(self.stride)
-        padding = list(self.padding)
-        stride[0] = max(self.stride[0] >> x.num_pending_hw_downsamples, 1)
-        if stride[0] == self.stride[0] and x.num_pending_hw_downsamples == 0:
-            weight = self.weight
-        else:
-            padding[0] = 0
-            if stride[0] == 1:
-                assert self.stride[0] == self.kernel_size[0] or self.kernel_size[0] == 3, "don't do this or teach me how to do this /kl"
-                weight = self.weight.sum(dim=2, keepdim=True)
+    def forward(self, x: torch.Tensor):
+        if self.adaptive:
+            x: SpatialTensor
+            stride = list(self.stride)
+            padding = list(self.padding)
+            stride[0] = max(self.stride[0] >> x.num_pending_hw_downsamples, 1)
+            if stride[0] == self.stride[0] and x.num_pending_hw_downsamples == 0:
+                weight = self.weight
             else:
-                assert self.stride[0] == self.kernel_size[0], "don't do this or teach me how to do this /kl"
-                weight = einops.reduce(
-                    self.weight,
-                    'co ci (dr dc) ... -> co ci dr ...',
-                    'sum',
-                    dr=stride[0],
-                )
-        x: SpatialTensor = nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
-        x.num_downsamples += self.num_downsamples
-        return x
+                padding[0] = 0
+                if stride[0] == 1:
+                    assert self.stride[0] == self.kernel_size[0] or self.kernel_size[0] == 3, "don't do this or teach me how to do this /kl"
+                    weight = self.weight.sum(dim=2, keepdim=True)
+                else:
+                    assert self.stride[0] == self.kernel_size[0], "don't do this or teach me how to do this /kl"
+                    weight = einops.reduce(
+                        self.weight,
+                        'co ci (dr dc) ... -> co ci dr ...',
+                        'sum',
+                        dr=stride[0],
+                    )
+            x: SpatialTensor = nnf.conv3d(x, weight, self.bias, stride, padding, self.dilation, self.groups)
+            x.num_downsamples += self.num_downsamples
+            return x
+        else:
+            return super().forward(x)
 
 class InflatableInputConv3d(InflatableConv3d):
     def __init__(self, *args, force: bool = False, **kwargs):
