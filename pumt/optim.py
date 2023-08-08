@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from lightning.pytorch.cli import instantiate_class
 from torch import nn
 from torch.optim import Optimizer
@@ -5,7 +7,7 @@ from torch.optim import Optimizer
 from luolib.models.utils import create_param_groups, split_weight_decay_keys
 from luolib.types import LRSchedulerConfig
 
-def build_optimizer(model: nn.Module, optimizer_conf: dict):
+def build_optimizer(model: nn.Module, optimizer_conf: Mapping):
     decay_keys, no_decay_keys = split_weight_decay_keys(model)
     return instantiate_class(
         create_param_groups(model.named_parameters(), decay_keys, no_decay_keys),

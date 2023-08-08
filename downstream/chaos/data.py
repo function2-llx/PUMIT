@@ -1,13 +1,14 @@
+from collections.abc import Hashable
 from pathlib import Path
 
 from PIL import Image
-import cytoolz
+import einops
 from lightning import LightningDataModule
 import numpy as np
 from torch.utils.data import RandomSampler
 
-from luolib.types import tuple3_t
 from luolib import transforms as lt
+from luolib.types import tuple3_t
 from monai import transforms as mt
 from monai.config import PathLike
 from monai.data import CacheDataset, DataLoader
@@ -31,6 +32,19 @@ def read_label(label_dir: PathLike):
     img = np.vectorize(mr_mapping.get)(img)
     img = np.flip(np.rot90(img), 0)
     return img.astype(np.uint8)
+
+class InputTransformD(mt.Transform):
+    def __call__(self, data: dict[Hashable, ...]):
+        data = dict(data)
+        img, label = data['image'], data['label']
+        mean, std = img.meta['mean'], img.meta['std']
+        if img.shape[0] == 1:
+            img = einops.repeat(img, '1 ... -> c ...', c=2)
+            mean = einops.repeat(mean, '1 -> c', c=2)
+            std = einops.repeat(std, '1 -> c', c=2)
+        mean = einops.rearrange(mean, 'c -> c 1 1 1')
+        std = einops.rearrange(std, 'c -> c 1 1 1')
+        return img.as_tensor(), mean, std, label.as_tensor()
 
 class CHAOSDataModule(LightningDataModule):
     def __init__(
@@ -57,7 +71,11 @@ class CHAOSDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(['image', 'label'], image_only=True, ensure_channel_first=True),
-                mt.ScaleIntensityRangePercentilesD('image', 0.5, 99.5, 0., 1., clip=True, channel_wise=True),
+                mt.ScaleIntensityRangePercentilesD(
+                    'image',
+                    0.5, 99.5, 0., 1.,
+                    clip=True, channel_wise=True,
+                ),
                 lt.CleverStatsD('image'),
                 mt.OrientationD(['image', 'label'], 'SAR'),
                 mt.SpacingD(
@@ -88,7 +106,7 @@ class CHAOSDataModule(LightningDataModule):
                     ],
                     weights=(9, 3, 1),
                 ),
-                mt.SelectItemsD(['image', 'label']),
+                InputTransformD(),
             ],
             lazy=True,
         )
@@ -107,7 +125,6 @@ class CHAOSDataModule(LightningDataModule):
             self.num_workers,
             sampler=RandomSampler(dataset, num_samples=self.num_train_batches * self.train_batch_size),
             batch_size=self.train_batch_size,
-            collate_fn=cytoolz.identity,
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )

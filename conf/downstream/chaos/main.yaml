@@ -1,2 +1,51 @@
 model: model.yaml
 data: data.yaml
+trainer:
+  max_steps: 100000
+  precision: 16-mixed
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: main
+      save_dir: output/CHAOS
+      project: CHAOS
+  val_check_interval: 100
+  check_val_every_n_epoch: null
+  log_every_n_steps: 50
+  benchmark: true
+  use_distributed_sampler: false
+  callbacks:
+  - lightning.pytorch.callbacks.LearningRateMonitor
+  - class_path: lightning.pytorch.callbacks.ModelSummary
+    init_args:
+      max_depth: 2
+  - class_path: luolib.utils.lightning.ModelCheckpoint
+    init_args:
+      every_n_train_steps: 10000
+      save_top_k: -1
+      verbose: false
+      filename: "{step}"
+  - class_path: luolib.utils.lightning.ModelCheckpoint
+    init_args:
+      every_n_train_steps: 1000
+      save_last: true
+      save_top_k: 0
+      verbose: false
+  gradient_clip_val: 1
+  gradient_clip_algorithm: norm
+seed_everything: 42
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 5e-2
+lr_scheduler:
+  class_path: timm.scheduler.CosineLRScheduler
+  init_args:
+    t_in_epochs: false
+    lr_min: 1e-6
+    warmup_t: 5000
+    warmup_prefix: true
+lr_scheduler_config:
+  interval: step
+  frequency: 100

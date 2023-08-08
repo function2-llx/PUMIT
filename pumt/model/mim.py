@@ -1,10 +1,7 @@
 from collections.abc import Sequence
-from functools import cached_property
 from pathlib import Path
 
 import einops
-from lightning import LightningModule
-from lightning.pytorch.loggers import WandbLogger
 from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 import torch
 from torch import nn
@@ -15,6 +12,7 @@ from torchvision.utils import save_image
 from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
 from luolib.utils.grad import grad_norm
+from luolib.utils.lightning import LightningModule
 from monai.config import PathLike
 
 from pumt import sac
@@ -93,16 +91,6 @@ class ViTForMIM(ViT, LightningModule):
             if not k.startswith('tokenizer.')
         }
 
-    @cached_property
-    def run_dir(self) -> Path:
-        logger: WandbLogger = self.logger
-        if self.trainer.is_global_zero:
-            run_dir = Path(logger.save_dir) / Path(logger.experiment.dir).parent.name
-        else:
-            run_dir = None
-        run_dir = self.trainer.strategy.broadcast(run_dir)
-        return run_dir
-
     def forward(self, x: sac.SpatialTensor, visible_idx: torch.Tensor | None = None):
         if visible_idx is None:
             return super().forward(x)
@@ -132,24 +120,6 @@ class ViTForMIM(ViT, LightningModule):
                 x = x.scatter(dim=1, index=visible_idx, src=x_layer)
         self.rope.reset()
         return self.norm(x)
-
-    def configure_optimizers(self):
-        return {
-            'optimizer': (optimizer := build_optimizer(self, self.optimizer)),
-            'lr_scheduler': vars(build_lr_scheduler(optimizer, self.lr_scheduler, self.trainer.max_steps)),
-        }
-
-    def on_fit_start(self) -> None:
-        if self.trainer.is_global_zero:
-            (self.run_dir / 'model.txt').write_text(repr(self))
-
-    def lr_scheduler_step(self, scheduler: TIMMScheduler, metric=None):
-        scheduler.step_update(self.global_step + 1, metric)
-
-    def on_train_start(self) -> None:
-        scheduler: TIMMScheduler = self.lr_schedulers()
-        # https://github.com/Lightning-AI/lightning/issues/17972
-        scheduler.step_update(0)
 
     def training_step(self, batch: tuple[torch.Tensor, int, list[PathLike]], batch_idx: int, *args, **kwargs):
         x = sac.SpatialTensor(*batch[:2])

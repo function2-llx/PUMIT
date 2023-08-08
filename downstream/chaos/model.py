@@ -1,11 +1,13 @@
 from collections.abc import Sequence
 
-from lightning import LightningModule
+import einops
 import torch
 from torch import nn
 from torch.nn import functional as nnf
 
 from luolib.models.decoders.full_res import FullResAdapter
+from luolib.utils.lightning import LightningModule
+from monai.data import MetaTensor
 from monai.losses import DiceCELoss
 
 from pumt.model import SimpleViTAdapter
@@ -15,14 +17,14 @@ class CHAOSModel(LightningModule):
 
     def __init__(
         self,
-        *,
         backbone: SimpleViTAdapter,
         decoder: FullResAdapter,
         seg_feature_channels: Sequence[int],
         num_fg_classes: int = 4,
         loss: DiceCELoss | None = None,
+        *args, **kwargs,
     ):
-        super().__init__()
+        super().__init__(*args, **kwargs)
         self.backbone = backbone
         self.decoder = decoder
         self.seg_heads = nn.ModuleList([
@@ -41,25 +43,14 @@ class CHAOSModel(LightningModule):
             for seg_head, feature_map in zip(self.seg_heads, seg_feature_maps)
         ]
 
-    def compute_loss(self, output_logits: list[torch.Tensor] | torch.Tensor, seg_label: torch.Tensor):
-        if isinstance(output_logits, list):
-            seg_loss = torch.stack([
-                self.seg_loss_fn(
-                    nnf.interpolate(output_logit, seg_label.shape[2:], mode='trilinear'),
-                    seg_label,
-                )
-                for output_logit in output_logits
-            ])
-            return seg_loss[0], torch.dot(seg_loss, self.loss_weight)
-        else:
-            return self.seg_loss_fn(output_logits, seg_label)
-
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], *args, **kwargs):
-        img, label = batch
+    def training_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
+        img, mean, std, label = batch
+        img = (img - mean) / std
         logits = self(img)
         loss = torch.stack([
             self.loss(nnf.interpolate(logit, label.shape[2:], mode='trilinear'), label)
             for logit in logits
         ])
         loss = torch.dot(loss, self.loss_weight)
+        self.log('train/loss', loss)
         return loss

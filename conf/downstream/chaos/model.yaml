@@ -14,7 +14,7 @@ init_args:
           lateral_channels: [768, 768, 768, 768]
           lateral_kernel_sizes: [1, 1, 1, 1]
       spatial_dims: 3
-      num_input_channels: 1
+      num_input_channels: 2
       layer_channels: [32, 64, 128]
       kernel_sizes:
       - [1, 3, 3]

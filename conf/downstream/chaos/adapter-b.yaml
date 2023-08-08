@@ -1,6 +1,6 @@
 class_path: pumt.model.SimpleViTAdapter
 init_args:
-  in_channels: 1
+  in_channels: 2
   adaptive_patch_embed: false
   patch_size: [4, 16, 16]
   aniso_d: 2
