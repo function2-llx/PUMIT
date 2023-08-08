@@ -1,7 +1,7 @@
 from pathlib import Path
-import itertools as it
 
 from PIL import Image
+import cytoolz
 from lightning import LightningDataModule
 import numpy as np
 from torch.utils.data import RandomSampler
@@ -36,7 +36,7 @@ class CHAOSDataModule(LightningDataModule):
     def __init__(
         self, *,
         num_fg_classes: int = 4,
-        patch_size: tuple3_t[int],
+        sample_size: tuple3_t[int],
         spacing: tuple3_t[float],
         num_workers: int,
         num_cache_workers: int | None = None,
@@ -45,7 +45,7 @@ class CHAOSDataModule(LightningDataModule):
     ):
         super().__init__()
         self.num_fg_classes = num_fg_classes
-        self.sample_size = patch_size
+        self.sample_size = sample_size
         self.spacing = spacing
         self.num_workers = num_workers
         self.num_cache_workers = num_workers if num_cache_workers is None else num_workers
@@ -54,44 +54,29 @@ class CHAOSDataModule(LightningDataModule):
 
     @property
     def train_transform(self):
-        class_indices_postfix = '_cls_indices'
-        fg_mask_key = 'fg_mask'
         return mt.Compose(
             [
                 mt.LoadImageD(['image', 'label'], image_only=True, ensure_channel_first=True),
-                mt.OrientationD(['image', 'label'], 'SAR'),
                 mt.ScaleIntensityRangePercentilesD('image', 0.5, 99.5, 0., 1., clip=True, channel_wise=True),
-                lt.CreateForegroundMaskD('image', fg_mask_key),
-                mt.IntensityStatsD('image', ['mean', 'std'], 'stat', fg_mask_key, True),
-                mt.ClassesToIndicesD('label', class_indices_postfix, self.num_fg_classes + 1),
+                lt.CleverStatsD('image'),
+                mt.OrientationD(['image', 'label'], 'SAR'),
                 mt.SpacingD(
                     ['image', 'label'], self.spacing,
                     mode=[GridSampleMode.BILINEAR, GridSampleMode.NEAREST],
                 ),
-                mt.OneOf(
-                    [
-                        mt.RandSpatialCropD(['image', 'label'], self.sample_size, random_center=True, random_size=False),
-                        mt.RandCropByLabelClassesD(
-                            ['image', 'label'], 'label',
-                            self.sample_size,
-                            [0, *it.repeat(1 / self.num_fg_classes, self.num_fg_classes)],
-                            self.num_fg_classes + 1,
-                            indices_key=f'label{class_indices_postfix}',
-                        ),
-                    ],
-                    weights=(2, 1),
-                ),
+                mt.SpatialPadD(['image', 'label'], self.sample_size),
+                mt.RandSpatialCropD(['image', 'label'], self.sample_size, random_center=True, random_size=False),
                 mt.RandAffineD(
                     ['image', 'label'], self.sample_size, 1.,
                     rotate_range=(np.pi / 2, 0, 0), rotate_prob=0.2,
-                    scale_range=(-0.3, 0.4), isotropic_scale=True, scale_prob=0.2,
+                    scale_range=[(-0.3, 0.1), 0., 0.], isotropic_scale=True, scale_prob=0.2,
                     mode=[GridSampleMode.BILINEAR, GridSampleMode.NEAREST],
                 ),
                 mt.RandFlipD(['image', 'label'], 0.5, 0),
                 mt.RandFlipD(['image', 'label'], 0.5, 1),
                 mt.RandFlipD(['image', 'label'], 0.5, 2),
                 mt.RandGaussianNoiseD('image', 0.1),
-                mt.RandGaussianSmoothD('image', (0.5, 1.5), (0.5, 1.5), (0.5, 1.5), prob=0.1),
+                mt.RandGaussianSmoothD('image', (0.8, 1.2), (0.8, 1.2), (0.8, 1.2), prob=0.1),
                 mt.RandScaleIntensityD('image', 0.25, 0.15),
                 lt.RandAdjustContrastD('image', (0.75, 1.25), 0.15),
                 lt.SimulateLowResolutionD('image', (0.5, 1.), 0.15, 0),
@@ -121,6 +106,8 @@ class CHAOSDataModule(LightningDataModule):
             dataset,
             self.num_workers,
             sampler=RandomSampler(dataset, num_samples=self.num_train_batches * self.train_batch_size),
+            batch_size=self.train_batch_size,
+            collate_fn=cytoolz.identity,
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )
