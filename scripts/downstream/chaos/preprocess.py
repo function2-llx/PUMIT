@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from monai import transforms as mt
+from monai.transforms import allclose
 from monai.utils import ImageMetaKey
 
 from downstream.chaos.data import read_label
@@ -25,9 +26,10 @@ def main():
                 saver = mt.SaveImage(save_dir, '', resample=False, separate_folder=False)
                 if seq == 'T1DUAL':
                     img_in = loader(src_dir / 'InPhase')
-                    affine = img_in.affine
                     img_out = loader(src_dir / 'OutPhase')
-                    img = torch.cat((img_in, img_out), dim=0)
+                    assert mt.allclose(img_in.affine, img_out.affine)
+                    affine = img_in.affine
+                    img = torch.cat([img_in, img_out], 0)
                 elif seq == 'T2SPIR':
                     img = loader(src_dir)
                     affine = img.affine
@@ -38,10 +40,7 @@ def main():
                 if split == 'Test':
                     continue
                 label = read_label(case_dir / seq / 'Ground')
-                nib.save(
-                    nib.Nifti1Image(label, affine=affine, dtype=np.int64),
-                    save_dir / 'label.nii.gz',
-                )
+                nib.save(nib.Nifti1Image(label, affine), save_dir / 'label.nii.gz')
 
 if __name__ == '__main__':
     main()

@@ -21,4 +21,4 @@ def read_label(label_dir: PathLike):
     )
     img = np.vectorize(mr_mapping.get)(img)
     img = np.flip(np.rot90(img), 0)
-    return img
+    return img.astype(np.uint8)

@@ -78,7 +78,7 @@ class Attention(nn.Module):
             x = torch.cat([x[:, :1], self.rope(x[:, 1:])], dim=1)
         return x
 
-    def forward(self, x: torch.Tensor, visible_idx: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor):
         if self.sub_ln:
             q = self.expand_head(nnf.linear(x, self.q_proj.weight, self.q_bias))
             k = self.expand_head(nnf.linear(x, self.k_proj.weight))
