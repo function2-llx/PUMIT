@@ -23,8 +23,8 @@ from pumt.tokenizer import VQTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):
-    # input_norm_mean: torch.Tensor
-    # input_norm_std: torch.Tensor
+    input_norm_mean: torch.Tensor
+    input_norm_std: torch.Tensor
 
     def __init__(
         self,
@@ -82,7 +82,7 @@ class ViTForMIM(ViT, LightningModule):
         self.tokenizer.train(not self.tokenizer_eval)
 
     def input_norm(self, x: sac.SpatialTensor):
-        return nnf.instance_norm(x)
+        return (x - self.input_norm_mean) / self.input_norm_std
 
     def state_dict(self, *args, **kwargs):
         return {
