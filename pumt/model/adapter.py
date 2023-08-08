@@ -33,10 +33,10 @@ class SimpleViTAdapter(ViT):
         assert len(out_indexes) == len(self.fpn)
         self.norms = nn.ModuleList([nn.InstanceNorm3d(16, dim) for _ in range(len(out_indexes))])
 
-    def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
-        weight_key = f'{prefix}patch_embed.proj.weight'
-        state_dict[weight_key] = resample(state_dict[weight_key], self.patch_embed.patch_size)
-        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+    # def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
+    #     weight_key = f'{prefix}patch_embed.proj.weight'
+    #     state_dict[weight_key] = resample(state_dict[weight_key], self.patch_embed.patch_size)
+    #     return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def forward(self, x: torch.Tensor):
         states = self.forward_features(x)
