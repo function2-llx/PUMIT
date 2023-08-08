@@ -36,6 +36,7 @@ class ViTForMIM(ViT, LightningModule):
         optimizer: dict | None = None,
         lr_scheduler: LRSchedulerConfig | None = None,
         plot_image_every_n_steps: int = 500,
+        resume: Path | None = None,
         eva02_pretrained_path: Path | None = None,
         **kwargs,
     ):
@@ -74,7 +75,9 @@ class ViTForMIM(ViT, LightningModule):
             persistent=False,
         )
         self.plot_image_every_n_steps = plot_image_every_n_steps
-        if eva02_pretrained_path is not None:
+        if resume is not None:
+            load_ckpt(self, resume)
+        elif eva02_pretrained_path is not None:
             load_ckpt(self, eva02_pretrained_path, 'module')
 
     def train(self, mode: bool = True):
