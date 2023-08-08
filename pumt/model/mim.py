@@ -14,6 +14,7 @@ from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
 from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
+from luolib.utils.grad import grad_norm
 from monai.config import PathLike
 
 from pumt import sac
@@ -195,14 +196,6 @@ class ViTForMIM(ViT, LightningModule):
         return loss
 
     def on_before_optimizer_step(self, *args, **kwargs):
-        def grad_norm(m: nn.Module):
-            norm = 0.
-            for p in m.parameters():
-                if p.grad is not None:
-                    grad = p.grad.detach().flatten()
-                    norm += torch.dot(grad, grad)
-            return norm ** 0.5
-
         self.log('grad-norm/patch_embed', grad_norm(self.patch_embed))
         for i, block in enumerate(self.blocks):
             self.log(f'grad-norm/block-{i}', grad_norm(block))
