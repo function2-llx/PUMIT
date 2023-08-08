@@ -1,7 +1,7 @@
 model: model.yaml
 data: data.yaml
 trainer:
-  max_steps: 400000
+  max_steps: 300000
   precision: 16-mixed
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
@@ -31,4 +31,6 @@ trainer:
       save_last: true
       save_top_k: 0
       verbose: false
+  gradient_clip_val: 0.5
+  gradient_clip_algorithm: norm
 seed_everything: 666
