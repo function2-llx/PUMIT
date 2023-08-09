@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
+import shutil
 from zipfile import ZipFile
 
 import torch
@@ -16,9 +17,9 @@ from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.utils import BlendMode, ImageMetaKey, MetaKeys
 
-from downstream.chaos.data import save_pred
 from pumt.model import SimpleViTAdapter
 from pumt.model.vit import resample
+from downstream.chaos.data import save_pred
 
 class CHAOSModel(LightningModule):
     loss_weight: torch.Tensor
@@ -117,3 +118,9 @@ class CHAOSModel(LightningModule):
         if modality == 'T1DUAL':
             dicom_ref_dir /= 'InPhase'
         save_pred(pred.cpu().numpy(), save_dir, dicom_ref_dir)
+
+    def on_predict_end(self) -> None:
+        shutil.make_archive(
+            str(self.run_dir / f'{self.run_dir.name}-submit'), 'zip', self.predict_save_dir, '.',
+            verbose=True,
+        )
