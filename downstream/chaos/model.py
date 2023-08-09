@@ -84,8 +84,7 @@ class CHAOSModel(LightningModule):
             zipf.extractall(self.predict_save_dir)
 
     def tta_infer(self, x: torch.Tensor):
-        # tta_flips = [[2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
-        tta_flips = [[], [2]]
+        tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
         prob = None
         for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference'):
             cur_prob = sliding_window_inference(
