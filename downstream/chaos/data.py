@@ -80,6 +80,7 @@ class CHAOSDataModule(LightningDataModule):
         num_cache_workers: int | None = None,
         train_batch_size: int,
         num_train_batches: int,
+        ratio: float = 1.,
     ):
         super().__init__()
         self.num_fg_classes = num_fg_classes
@@ -89,6 +90,7 @@ class CHAOSDataModule(LightningDataModule):
         self.num_cache_workers = num_workers if num_cache_workers is None else num_workers
         self.train_batch_size = train_batch_size
         self.num_train_batches = num_train_batches
+        self.ratio = ratio
 
     @property
     def train_transform(self):
@@ -141,6 +143,8 @@ class CHAOSDataModule(LightningDataModule):
             {'image': data_dir / 'image.nii.gz', 'label': data_dir / 'label.nii.gz'}
             for data_dir in (DATASET_ROOT / 'Train').glob('*/*')
         ]
+        if self.ratio < 1.:
+            data = np.random.choice(data, int(self.ratio * len(data)), replace=False).tolist()
         dataset = CacheDataset(data, self.train_transform, num_workers=self.num_cache_workers)
         return DataLoader(
             dataset,
