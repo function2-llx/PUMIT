@@ -6,14 +6,13 @@ trainer:
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
-      name: main
+      name: base
       save_dir: output/CHAOS
       project: CHAOS
   val_check_interval: 100
   check_val_every_n_epoch: null
   log_every_n_steps: 50
   benchmark: true
-  use_distributed_sampler: false
   callbacks:
   - lightning.pytorch.callbacks.LearningRateMonitor
   - class_path: lightning.pytorch.callbacks.ModelSummary

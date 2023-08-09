@@ -1,0 +1,15 @@
+model: model.yaml
+data: data.yaml
+trainer:
+  precision: 16-mixed
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      name: base
+      save_dir: output/CHAOS-predict
+      project: CHAOS-predict
+  callbacks:
+  - class_path: lightning.pytorch.callbacks.ModelSummary
+    init_args:
+      max_depth: 2
+seed_everything: 42

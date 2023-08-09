@@ -3,4 +3,3 @@ init_args:
   sample_size: [32, 192, 192]
   spacing: [9, 1.62109, 1.62109]
   train_batch_size: 8
-  num_train_batches: 100000

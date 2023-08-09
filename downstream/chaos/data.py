@@ -11,8 +11,10 @@ from luolib import transforms as lt
 from luolib.types import tuple3_t
 from monai import transforms as mt
 from monai.config import PathLike
-from monai.data import CacheDataset, DataLoader
-from monai.utils import GridSampleMode
+from monai.data import CacheDataset, DataLoader, Dataset
+from monai.utils import GridSampleMode, GridSamplePadMode
+
+DATASET_ROOT = Path('downstream/data/CHAOS')
 
 mr_mapping = {
     0: 0,
@@ -22,21 +24,41 @@ mr_mapping = {
     252: 4,
 }
 
+inv_mr_mapping = {
+    v: k
+    for k, v in mr_mapping.items()
+}
+
+def convert_label(label: np.ndarray):
+    label = np.vectorize(mr_mapping.get)(label)
+    return np.flip(np.rot90(label), 0)
+
+def convert_pred(pred: np.ndarray):
+    pred = np.vectorize(inv_mr_mapping.get, otypes=[np.uint8])(pred)
+    return np.rot90(np.flip(pred, 0), 3)
+
 def read_label(label_dir: PathLike):
     label_dir = Path(label_dir)
     png_files = sorted(label_dir.glob('*.png'))
-    img = np.stack(
+    label = np.stack(
         [np.array(Image.open(png_path)) for png_path in png_files],
         axis=-1,
     )
-    img = np.vectorize(mr_mapping.get)(img)
-    img = np.flip(np.rot90(img), 0)
-    return img.astype(np.uint8)
+    label = convert_label(label)
+    return label.astype(np.uint8)
+
+def save_pred(pred: np.ndarray, save_dir: PathLike, dicom_ref_dir: PathLike):
+    save_dir = Path(save_dir)
+    dicom_ref_dir = Path(dicom_ref_dir)
+    dcm_files = sorted(dicom_ref_dir.glob('*.dcm'))
+    pred = convert_pred(pred)
+    for i in range(pred.shape[2]):
+        Image.fromarray(pred[..., i]).save(save_dir / f'{dcm_files[i].stem}.png')
 
 class InputTransformD(mt.Transform):
     def __call__(self, data: dict[Hashable, ...]):
         data = dict(data)
-        img, label = data['image'], data['label']
+        img = data['image']
         mean, std = img.meta['mean'], img.meta['std']
         if img.shape[0] == 1:
             img = einops.repeat(img, '1 ... -> c ...', c=2)
@@ -44,7 +66,9 @@ class InputTransformD(mt.Transform):
             std = einops.repeat(std, '1 -> c', c=2)
         mean = einops.rearrange(mean, 'c -> c 1 1 1')
         std = einops.rearrange(std, 'c -> c 1 1 1')
-        return img.as_tensor(), mean, std, label.as_tensor()
+        if (label := data.get('label')) is not None:
+            return img.as_tensor(), mean, std, label.as_tensor()
+        return img, mean, std
 
 class CHAOSDataModule(LightningDataModule):
     def __init__(
@@ -81,6 +105,7 @@ class CHAOSDataModule(LightningDataModule):
                 mt.SpacingD(
                     ['image', 'label'], self.spacing,
                     mode=[GridSampleMode.BILINEAR, GridSampleMode.NEAREST],
+                    padding_mode=GridSamplePadMode.ZEROS,
                 ),
                 mt.SpatialPadD(['image', 'label'], self.sample_size),
                 mt.RandSpatialCropD(['image', 'label'], self.sample_size, random_center=True, random_size=False),
@@ -117,7 +142,7 @@ class CHAOSDataModule(LightningDataModule):
                 'image': data_dir / 'image.nii.gz',
                 'label': data_dir / 'label.nii.gz',
             }
-            for data_dir in Path('downstream/data/CHAOS/Train').glob('*/*')
+            for data_dir in (DATASET_ROOT / 'Train').glob('*/*')
         ]
         dataset = CacheDataset(data, self.train_transform, num_workers=self.num_cache_workers)
         return DataLoader(
@@ -128,3 +153,29 @@ class CHAOSDataModule(LightningDataModule):
             persistent_workers=self.num_workers > 0,
             pin_memory=True,
         )
+
+    @property
+    def predict_transform(self):
+        return mt.Compose(
+            [
+                mt.LoadImageD('image', image_only=True, ensure_channel_first=True),
+                mt.ScaleIntensityRangePercentilesD(
+                    'image',
+                    0.5, 99.5, 0., 1.,
+                    clip=True, channel_wise=True,
+                ),
+                lt.CleverStatsD('image'),
+                mt.OrientationD('image', 'SAR'),
+                mt.SpacingD('image', self.spacing, mode=GridSampleMode.BILINEAR, padding_mode=GridSamplePadMode.ZEROS),
+                InputTransformD(),
+            ],
+            lazy=True,
+        )
+
+    def predict_dataloader(self):
+        data = [
+            {'image': data_dir / 'image.nii.gz'}
+            for data_dir in (DATASET_ROOT / 'Test').glob('*/*')
+        ]
+        dataset = Dataset(data, self.predict_transform)
+        return DataLoader(dataset, self.num_workers, pin_memory=True)
