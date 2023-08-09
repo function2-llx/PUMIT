@@ -1,0 +1,5 @@
+class_path: downstream.btcv.BTCVDataModule
+init_args:
+  sample_size: [48, 192, 192]
+  spacing: [3, 0.75, 0.75]
+  train_batch_size: 8

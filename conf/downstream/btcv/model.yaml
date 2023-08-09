@@ -1,0 +1,31 @@
+class_path: downstream.btcv.BTCVModel
+init_args:
+  backbone: adapter-b.yaml
+  decoder:
+    class_path: luolib.models.decoders.FullResAdapter
+    init_args:
+      inner:
+        class_path: luolib.models.decoders.PlainConvUNetDecoder
+        init_args:
+          spatial_dims: 3
+          layer_channels: [128, 256, 512, 512]
+          kernel_sizes: [3, 3, 3, 3]
+          upsample_strides: [2, 2, 2]
+          lateral_channels: [768, 768, 768, 768]
+          lateral_kernel_sizes: [1, 1, 1, 1]
+      spatial_dims: 3
+      num_input_channels: 1
+      layer_channels: [32, 64, 128]
+      kernel_sizes:
+      - [1, 3, 3]
+      - [1, 3, 3]
+      strides:
+      - [1, 2, 2]
+      - [1, 2, 2]
+  seg_feature_channels: [32, 64, 128, 256]
+  loss:
+    class_path: monai.losses.DiceCELoss
+    init_args:
+      include_background: true
+      to_onehot_y: true
+      softmax: true

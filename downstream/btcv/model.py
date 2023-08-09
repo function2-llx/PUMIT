@@ -1,27 +1,23 @@
 from collections.abc import Sequence
-from pathlib import Path
-import shutil
-from zipfile import ZipFile
 
 import torch
 from torch import nn
 from torch.nn import functional as nnf
 from tqdm import tqdm
 
-from luolib import transforms as lt
 from luolib.models.decoders.full_res import FullResAdapter
 from luolib.types import tuple3_t
 from luolib.utils.lightning import LightningModule
 from monai.data import MetaTensor
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
-from monai.utils import BlendMode, ImageMetaKey, MetaKeys
+from monai.metrics import DiceMetric
+from monai.utils import BlendMode, MetaKeys, MetricReduction
 
 from pumt.model import SimpleViTAdapter
 from pumt.model.vit import resample
-from downstream.chaos.data import save_pred
 
-class CHAOSModel(LightningModule):
+class BTCVModel(LightningModule):
     loss_weight: torch.Tensor
 
     def __init__(
@@ -30,7 +26,7 @@ class CHAOSModel(LightningModule):
         backbone: SimpleViTAdapter,
         decoder: FullResAdapter,
         seg_feature_channels: Sequence[int],
-        num_fg_classes: int = 4,
+        num_fg_classes: int = 13,
         loss: DiceCELoss | None = None,
         sample_size: tuple3_t[int],
         sw_batch_size: int = 4,
@@ -50,6 +46,7 @@ class CHAOSModel(LightningModule):
         self.sample_size = sample_size
         self.sw_batch_size = sw_batch_size
         self.sw_overlap = sw_overlap
+        self.dice_metric = DiceMetric(num_classes=num_fg_classes + 1)
 
     def get_seg_feature_maps(self, x: torch.Tensor):
         feature_maps = self.backbone(x)
@@ -76,22 +73,16 @@ class CHAOSModel(LightningModule):
         seg_feature_map = self.get_seg_feature_maps(x)[0]
         return self.seg_heads[0](seg_feature_map).softmax(dim=1)
 
-    @property
-    def predict_save_dir(self):
-        return self.run_dir / 'submit'
-
-    def on_predict_start(self) -> None:
-        with ZipFile(Path(__file__).parent / 'CHAOS_submission_template_new.zip') as zipf:
-            zipf.extractall(self.predict_save_dir)
+    def sw_infer(self, x: torch.Tensor):
+        return sliding_window_inference(
+            x, self.sample_size, self.sw_batch_size, self, self.sw_overlap, BlendMode.GAUSSIAN,
+        )
 
     def tta_infer(self, x: torch.Tensor):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
         prob = None
-        for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference', disable=True):
-            cur_prob = sliding_window_inference(
-                torch.flip(x, flip_idx) if flip_idx else x,
-                self.sample_size, self.sw_batch_size, self, self.sw_overlap, BlendMode.GAUSSIAN,
-            )
+        for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference'):
+            cur_prob = self.sw_infer(torch.flip(x, flip_idx) if flip_idx else x)
             if flip_idx:
                 cur_prob = torch.flip(cur_prob, flip_idx)
             if prob is None:
@@ -101,27 +92,20 @@ class CHAOSModel(LightningModule):
         prob /= len(tta_flips)
         return prob
 
-    def predict_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int, dataloader_idx: int = 0):
-        img, mean, std = batch
-        img: MetaTensor = (img - mean) / std
-        meta = img[0].meta
-        original_path = Path(meta[ImageMetaKey.FILENAME_OR_OBJ])
-        split, num, modality = original_path.parts[-4:-1]
-        img_rel_path = f'MR/{num}/{modality}'
-        prob = self.tta_infer(img)[0]
-        inverse_orientation = lt.AffineOrientation(meta[MetaKeys.ORIGINAL_AFFINE])
-        prob = inverse_orientation(prob)
-        prob = resample(prob[None], tuple(meta[MetaKeys.SPATIAL_SHAPE].tolist()))[0]
-        pred = prob.argmax(dim=0).byte()
-        dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
-        if modality == 'T1DUAL':
-            dicom_ref_dir /= 'InPhase'
-        save_pred(pred.cpu().numpy(), self.predict_save_dir / 'Task5' / img_rel_path / 'Results', dicom_ref_dir)
-        pred[pred != 1] = 0
-        save_pred(pred.cpu().numpy(), self.predict_save_dir / 'Task3' / img_rel_path / 'Results', dicom_ref_dir)
+    def on_validation_epoch_start(self) -> None:
+        self.dice_metric.reset()
 
-    def on_predict_end(self) -> None:
-        shutil.make_archive(
-            str(self.run_dir / f'{self.run_dir.name}-submit'), 'zip', self.predict_save_dir, '.',
-            verbose=True,
-        )
+    def validation_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
+        img, mean, std, label = batch
+        img: MetaTensor = (img - mean) / std
+        img = img.as_tensor()
+        prob = self.sw_infer(img)
+        prob = resample(prob, label.shape[2:])
+        pred = prob.argmax(dim=1, keepdim=True)
+        self.dice_metric(pred, label)
+
+    def on_validation_epoch_end(self) -> None:
+        dice = self.dice_metric.aggregate(MetricReduction.MEAN_BATCH) * 100
+        for i in range(dice.shape[0]):
+            self.log(f'val/dice/{i}', dice[i])
+        self.log(f'val/dice/avg', dice[1:].mean())
