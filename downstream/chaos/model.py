@@ -101,20 +101,20 @@ class CHAOSModel(LightningModule):
         prob /= len(tta_flips)
         return prob
 
-    def predict_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
+    def predict_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int, dataloader_idx: int = 0):
         img, mean, std = batch
         img: MetaTensor = (img - mean) / std
         meta = img[0].meta
         original_path = Path(meta[ImageMetaKey.FILENAME_OR_OBJ])
-        modality = original_path.parts[-2]
-        img_rel_path = f'MR/{original_path.parts[-3]}/{modality}'
+        split, num, modality = original_path.parts[-4:-1]
+        img_rel_path = f'MR/{num}/{modality}'
         prob = self.tta_infer(img)[0]
         inverse_orientation = lt.AffineOrientation(meta[MetaKeys.ORIGINAL_AFFINE])
         prob = inverse_orientation(prob)
         prob = resample(prob[None], tuple(meta[MetaKeys.SPATIAL_SHAPE].tolist()))[0]
         pred = prob.argmax(dim=0).byte()
         save_dir = self.predict_save_dir / 'Task5' / img_rel_path / 'Results'
-        dicom_ref_dir = Path('datasets/CHAOS/Test_Sets') / img_rel_path / 'DICOM_anon'
+        dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
         if modality == 'T1DUAL':
             dicom_ref_dir /= 'InPhase'
         save_pred(pred.cpu().numpy(), save_dir, dicom_ref_dir)

@@ -138,10 +138,7 @@ class CHAOSDataModule(LightningDataModule):
 
     def train_dataloader(self):
         data = [
-            {
-                'image': data_dir / 'image.nii.gz',
-                'label': data_dir / 'label.nii.gz',
-            }
+            {'image': data_dir / 'image.nii.gz', 'label': data_dir / 'label.nii.gz'}
             for data_dir in (DATASET_ROOT / 'Train').glob('*/*')
         ]
         dataset = CacheDataset(data, self.train_transform, num_workers=self.num_cache_workers)
@@ -155,7 +152,7 @@ class CHAOSDataModule(LightningDataModule):
         )
 
     @property
-    def predict_transform(self):
+    def predict_test_transform(self):
         return mt.Compose(
             [
                 mt.LoadImageD('image', image_only=True, ensure_channel_first=True),
@@ -173,9 +170,15 @@ class CHAOSDataModule(LightningDataModule):
         )
 
     def predict_dataloader(self):
-        data = [
+        test_data = [
             {'image': data_dir / 'image.nii.gz'}
             for data_dir in (DATASET_ROOT / 'Test').glob('*/*')
         ]
-        dataset = Dataset(data, self.predict_transform)
-        return DataLoader(dataset, self.num_workers, pin_memory=True)
+        test_dataloader = DataLoader(Dataset(test_data, self.predict_test_transform), self.num_workers, pin_memory=True)
+        train_data = [
+            # {'image': data_dir / 'image.nii.gz', 'label': data_dir / 'label.nii.gz'}
+            {'image': data_dir / 'image.nii.gz'}
+            for data_dir in (DATASET_ROOT / 'Train').glob('*/*')
+        ]
+        train_dataloader = DataLoader(Dataset(train_data, self.predict_test_transform), self.num_workers, pin_memory=True)
+        return test_dataloader, train_dataloader
