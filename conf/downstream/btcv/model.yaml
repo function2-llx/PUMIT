@@ -1,6 +1,6 @@
 class_path: downstream.btcv.BTCVModel
 init_args:
-  backbone: adapter-b.yaml
+  backbone: backbone-b.yaml
   decoder:
     class_path: luolib.models.decoders.FullResAdapter
     init_args:

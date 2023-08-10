@@ -5,10 +5,15 @@ import numpy as np
 import torch
 from torch import nn
 
-from .vit import ViT, resample
+from .vit import ViT
 
 class SimpleViTAdapter(ViT):
-    def __init__(self, aniso_d: int, out_indexes: Sequence[int], *args, **kwargs):
+    def __init__(
+        self,
+        aniso_d: int,
+        out_indexes: Sequence[int],
+        *args, **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         dim = self.embed_dim
         patch_size = self.patch_embed.patch_size

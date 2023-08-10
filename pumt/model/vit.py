@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import einops
@@ -149,7 +150,7 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = SwiGLU(dim, mlp_hidden_dim, sub_ln=sub_ln)
 
-    def forward(self, x: torch.Tensor, visible_idx: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor):
         x = x + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
@@ -162,14 +163,19 @@ def resample(x: torch.Tensor, shape: tuple3_t[int]):
         x = nnf.interpolate(x, shape, mode='trilinear')
     return x
 
+@dataclass
+class Checkpoint:
+    path: Path | None = None
+    state_dict_key: str = 'state_dict'
+
 class ViT(nn.Module):
     def __init__(
-        self,
+        self, *,
         in_channels: int = 3,
         patch_size: param3_t[int] = 16,
         adaptive_patch_embed: bool = True,
         embed_dim: int = 768,
-        pos_embed_shape: tuple3_t[int] = (8, 16, 16),
+        pos_embed_shape: tuple3_t[int],
         pretrained_pos_embed_shape: tuple2_t[int] | tuple3_t[int] | None = None,
         rope_rescale_shape: tuple3_t[int] = (-1, -1, -1),
         rope_base: tuple3_t[float] = (2333., 10000., 10000.),
@@ -184,7 +190,7 @@ class ViT(nn.Module):
         drop_path_rate: float = 0.,
         grad_ckpt: bool = False,
         patch_embed_grad_scale: float = 1.,
-        eva02_pretrained_path: Path | None = None,
+        pretrained_ckpt: Checkpoint,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -216,8 +222,7 @@ class ViT(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.grad_ckpt = grad_ckpt
         self.patch_embed_grad_scale = patch_embed_grad_scale
-        if eva02_pretrained_path is not None:
-            load_ckpt(self, eva02_pretrained_path, 'module')
+        load_ckpt(self, pretrained_ckpt.path, pretrained_ckpt.state_dict_key)
 
     def prepare_seq_input(self, x: torch.Tensor):
         x = self.patch_embed(x)

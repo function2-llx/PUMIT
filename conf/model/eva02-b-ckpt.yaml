@@ -1,0 +1,2 @@
+path: pre-trained/eva02_B_pt_in21k_p14.pt
+state_dict_key: module
