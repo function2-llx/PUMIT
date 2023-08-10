@@ -21,7 +21,7 @@ class SimpleViTAdapter(ViT):
         self.fpn = nn.ModuleList([
             nn.Sequential(
                 nn.ConvTranspose3d(dim, dim, *get_args(4)),
-                nn.InstanceNorm3d(dim),
+                nn.InstanceNorm3d(dim, affine=True),
                 nn.GELU(),
                 nn.ConvTranspose3d(dim, dim, *get_args(3)),
             ),
@@ -31,12 +31,7 @@ class SimpleViTAdapter(ViT):
         ])
         self.out_indexes = out_indexes
         assert len(out_indexes) == len(self.fpn)
-        self.norms = nn.ModuleList([nn.InstanceNorm3d(16, dim) for _ in range(len(out_indexes))])
-
-    # def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
-    #     weight_key = f'{prefix}patch_embed.proj.weight'
-    #     state_dict[weight_key] = resample(state_dict[weight_key], self.patch_embed.patch_size)
-    #     return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+        self.norms = nn.ModuleList([nn.InstanceNorm3d(dim, affine=True) for _ in range(len(out_indexes))])
 
     def forward(self, x: torch.Tensor):
         states = self.forward_features(x)

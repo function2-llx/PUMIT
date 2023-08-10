@@ -54,8 +54,8 @@ class BTCVModel(LightningModule):
         return seg_feature_maps
 
     def training_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
-        img, mean, std, label = batch
-        img = (img - mean) / std
+        img, label = batch
+        img = img * 2 - 1
         seg_feature_maps = self.get_seg_feature_maps(img)
         logits = [
             seg_head(feature_map)
@@ -96,8 +96,8 @@ class BTCVModel(LightningModule):
         self.dice_metric.reset()
 
     def validation_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
-        img, mean, std, label = batch
-        img: MetaTensor = (img - mean) / std
+        img, label = batch
+        img = img * 2 - 1
         img = img.as_tensor()
         prob = self.sw_infer(img)
         prob = resample(prob, label.shape[2:])

@@ -23,6 +23,7 @@ trainer:
       save_top_k: 1
       filename: "{step}"
       monitor: val/dice/avg
+      mode: max
       verbose: true
   - class_path: luolib.utils.lightning.ModelCheckpoint
     init_args:
