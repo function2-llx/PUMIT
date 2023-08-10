@@ -98,7 +98,6 @@ class BTCVModel(LightningModule):
     def validation_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
         img, label = batch
         img = img * 2 - 1
-        img = img.as_tensor()
         prob = self.sw_infer(img)
         prob = resample(prob, label.shape[2:])
         pred = prob.argmax(dim=1, keepdim=True)
