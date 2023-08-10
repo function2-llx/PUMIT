@@ -39,6 +39,7 @@ class BTCVDataModule(LightningDataModule):
         train_batch_size: int,
         num_train_batches: int,
         cache_num: int = sys.maxsize,
+        ratio: float = 1.,
     ):
         super().__init__()
         self.num_fg_classes = num_fg_classes
@@ -49,6 +50,7 @@ class BTCVDataModule(LightningDataModule):
         self.train_batch_size = train_batch_size
         self.num_train_batches = num_train_batches
         self.cache_num = cache_num
+        self.ratio = ratio
 
     @property
     def train_transform(self):
@@ -80,6 +82,7 @@ class BTCVDataModule(LightningDataModule):
                             [0, *it.repeat(1, self.num_fg_classes)],
                             num_classes=self.num_fg_classes + 1,
                             indices_key=indices_key,
+                            warn=False,
                         ),
                     ],
                     (2, 1),
@@ -125,6 +128,8 @@ class BTCVDataModule(LightningDataModule):
 
     def train_dataloader(self):
         data = load_decathlon_datalist(DATASET_ROOT / 'smit.json', data_list_key='training')
+        if self.ratio < 1.:
+            data = np.random.choice(data, int(self.ratio * len(data)), replace=False).tolist()
         dataset = CacheDataset(data, self.train_transform, cache_num=self.cache_num, num_workers=self.num_cache_workers)
         return DataLoader(
             dataset,

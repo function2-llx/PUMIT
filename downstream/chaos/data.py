@@ -188,10 +188,6 @@ class CHAOSDataModule(LightningDataModule):
                     'mode': GridSampleMode.BILINEAR,
                     'padding_mode': GridSamplePadMode.ZEROS,
                 },
-                'label': {
-                    'mode': GridSampleMode.NEAREST,
-                    'padding_mode': GridSamplePadMode.ZEROS,
-                },
             }
         )
 
