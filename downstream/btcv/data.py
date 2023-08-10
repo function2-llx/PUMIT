@@ -25,8 +25,7 @@ class InputTransformD(mt.Transform):
         img, label = data['image'], data['label']
         if self.as_tensor:
             img = img.as_tensor()
-            label = label.as_tensor()
-        return img, label
+        return img, label.as_tensor()
 
 class BTCVDataModule(LightningDataModule):
     def __init__(
@@ -39,6 +38,7 @@ class BTCVDataModule(LightningDataModule):
         train_batch_size: int,
         num_train_batches: int,
         cache_num: int = sys.maxsize,
+        crop_weight: tuple[float, float] = (2, 1),
         ratio: float = 1.,
     ):
         super().__init__()
@@ -51,6 +51,7 @@ class BTCVDataModule(LightningDataModule):
         self.num_train_batches = num_train_batches
         self.cache_num = cache_num
         self.ratio = ratio
+        self.crop_weight = crop_weight
 
     @property
     def train_transform(self):
@@ -85,7 +86,7 @@ class BTCVDataModule(LightningDataModule):
                             warn=False,
                         ),
                     ],
-                    (2, 1),
+                    self.crop_weight,
                     apply_pending=False,
                 ),
                 mt.RandAffineD(
@@ -145,10 +146,10 @@ class BTCVDataModule(LightningDataModule):
         return mt.Compose(
             [
                 mt.LoadImageD(['image', 'label'], image_only=True, ensure_channel_first=True),
-                mt.ScaleIntensityRangePercentilesD(
+                mt.ScaleIntensityRangeD(
                     'image',
-                    0.5, 99.5, 0., 1.,
-                    clip=True, channel_wise=True,
+                    -175, 250, 0., 1.,
+                    clip=True,
                 ),
                 lt.CleverStatsD('image'),
                 mt.OrientationD(['image', 'label'], 'SAR'),

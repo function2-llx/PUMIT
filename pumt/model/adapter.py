@@ -10,7 +10,6 @@ from .vit import ViT
 class SimpleViTAdapter(ViT):
     def __init__(
         self,
-        aniso_d: int,
         out_indexes: Sequence[int],
         *args, **kwargs,
     ):
@@ -19,8 +18,7 @@ class SimpleViTAdapter(ViT):
         patch_size = self.patch_embed.patch_size
         assert patch_size[1] == patch_size[2] == 16
         assert patch_size[0] & patch_size[0] - 1 == 0
-        assert patch_size[0] == max(1, 16 >> aniso_d)
-        self.aniso_d = aniso_d
+        aniso_d = max(0, (16 // patch_size[0]).bit_count() - 1)
         assert not self.patch_embed.adaptive
         get_args = lambda i: ((1 if aniso_d >= i else 2, 2, 2), ) * 2
         self.fpn = nn.ModuleList([

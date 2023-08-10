@@ -47,6 +47,9 @@ class BTCVModel(LightningModule):
         self.sw_overlap = sw_overlap
         self.dice_metric = DiceMetric(num_classes=num_fg_classes + 1)
 
+    def input_norm(self, x: torch.Tensor):
+        return 2 * x - 1
+
     def get_seg_feature_maps(self, x: torch.Tensor):
         feature_maps = self.backbone(x)
         seg_feature_maps = self.decoder(feature_maps, x)[::-1]
@@ -54,7 +57,7 @@ class BTCVModel(LightningModule):
 
     def training_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
         img, label = batch
-        img = img * 2 - 1
+        img = self.input_norm(img)
         seg_feature_maps = self.get_seg_feature_maps(img)
         logits = [
             seg_head(feature_map)
@@ -70,12 +73,15 @@ class BTCVModel(LightningModule):
 
     def forward(self, x: torch.Tensor):
         seg_feature_map = self.get_seg_feature_maps(x)[0]
-        return self.seg_heads[0](seg_feature_map).softmax(dim=1)
+        return self.seg_heads[0](seg_feature_map)
 
-    def sw_infer(self, x: torch.Tensor):
-        return sliding_window_inference(
+    def sw_infer(self, x: torch.Tensor, softmax: bool = True):
+        y = sliding_window_inference(
             x, self.sample_size, self.sw_batch_size, self, self.sw_overlap, BlendMode.GAUSSIAN,
         )
+        if softmax:
+            y = y.softmax(dim=1)
+        return y
 
     def tta_infer(self, x: torch.Tensor):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
@@ -96,7 +102,7 @@ class BTCVModel(LightningModule):
 
     def validation_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
         img, label = batch
-        img = img * 2 - 1
+        img = self.input_norm(img)
         prob = self.sw_infer(img)
         prob = resample(prob, label.shape[2:])
         pred = prob.argmax(dim=1, keepdim=True)
