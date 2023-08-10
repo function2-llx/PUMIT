@@ -1,2 +1,4 @@
-path: pre-trained/eva02_B_pt_in21k_p14.pt
-state_dict_key: module
+pretrained_pos_embed_shape: [16, 16]
+pretrained_ckpt:
+  path: pre-trained/eva02_B_pt_in21k_p14.pt
+  state_dict_key: module
