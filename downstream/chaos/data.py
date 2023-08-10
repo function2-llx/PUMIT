@@ -136,6 +136,17 @@ class CHAOSDataModule(LightningDataModule):
                 InputTransformD(),
             ],
             lazy=True,
+            overrides={
+                # https://github.com/Project-MONAI/MONAI/issues/6850
+                'image': {
+                    'mode': GridSampleMode.BILINEAR,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+                'label': {
+                    'mode': GridSampleMode.NEAREST,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+            }
         )
 
     def train_dataloader(self):
@@ -171,6 +182,17 @@ class CHAOSDataModule(LightningDataModule):
                 InputTransformD(),
             ],
             lazy=True,
+            overrides={
+                # https://github.com/Project-MONAI/MONAI/issues/6850
+                'image': {
+                    'mode': GridSampleMode.BILINEAR,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+                'label': {
+                    'mode': GridSampleMode.NEAREST,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+            }
         )
 
     def predict_dataloader(self):

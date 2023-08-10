@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import sys
 
-import einops
 from lightning import LightningDataModule
 import numpy as np
 from torch.utils.data import RandomSampler
@@ -65,7 +64,8 @@ class BTCVDataModule(LightningDataModule):
                 ),
                 mt.OrientationD(['image', 'label'], 'SAR'),
                 mt.SpacingD(
-                    ['image', 'label'], self.spacing,
+                    ['image', 'label'],
+                    self.spacing,
                     mode=[GridSampleMode.BILINEAR, GridSampleMode.NEAREST],
                     padding_mode=GridSamplePadMode.ZEROS,
                 ),
@@ -77,7 +77,7 @@ class BTCVDataModule(LightningDataModule):
                         mt.RandCropByLabelClassesD(
                             ['image', 'label'], 'label',
                             self.sample_size,
-                            [0, *it.repeat(1 / self.num_fg_classes, self.num_fg_classes)],
+                            [0, *it.repeat(1, self.num_fg_classes)],
                             num_classes=self.num_fg_classes + 1,
                             indices_key=indices_key,
                         ),
@@ -110,6 +110,17 @@ class BTCVDataModule(LightningDataModule):
                 InputTransformD(as_tensor=True),
             ],
             lazy=True,
+            overrides={
+                # https://github.com/Project-MONAI/MONAI/issues/6850
+                'image': {
+                    'mode': GridSampleMode.BILINEAR,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+                'label': {
+                    'mode': GridSampleMode.NEAREST,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+            }
         )
 
     def train_dataloader(self):
@@ -140,6 +151,17 @@ class BTCVDataModule(LightningDataModule):
                 InputTransformD(as_tensor=True),
             ],
             lazy=True,
+            overrides={
+                # https://github.com/Project-MONAI/MONAI/issues/6850
+                'image': {
+                    'mode': GridSampleMode.BILINEAR,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+                'label': {
+                    'mode': GridSampleMode.NEAREST,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+            }
         )
 
     def val_dataloader(self):
