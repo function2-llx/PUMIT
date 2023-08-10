@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import einops
-import numpy as np
 from timm.layers import DropPath
 import torch
 from torch import nn
@@ -16,6 +15,7 @@ from luolib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
 from pumt import sac
+from pumt.sac import resample
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
@@ -155,14 +155,6 @@ class Block(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
-def resample(x: torch.Tensor, shape: tuple3_t[int]):
-    downsample_shape = tuple(np.minimum(x.shape[2:], shape))
-    if downsample_shape != x.shape[2:]:
-        x = nnf.interpolate(x, downsample_shape, mode='area')
-    if shape != x.shape[2:]:
-        x = nnf.interpolate(x, shape, mode='trilinear')
-    return x
-
 @dataclass
 class Checkpoint:
     path: Path | None = None
@@ -194,10 +186,11 @@ class ViT(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
-        self.adaptive_patch_embed = adaptive_patch_embed
         self.patch_embed = PatchEmbed(patch_size, in_channels, embed_dim, adaptive_patch_embed, False)
         self.cls_token = NoWeightDecayParameter(torch.empty(1, 1, embed_dim))
         self.pos_embed = NoWeightDecayParameter(torch.empty(1, embed_dim, *pos_embed_shape))
+        nn.init.trunc_normal_(self.cls_token, std=.02)
+        nn.init.trunc_normal_(self.pos_embed, std=.02)
         self.pretrained_pos_embed_shape = pretrained_pos_embed_shape
         self.pos_drop = nn.Dropout(drop_rate, inplace=True)
         self.rope = SpatialRotaryEmbedding(embed_dim // num_heads, rope_rescale_shape, rope_base, rope_merge_hw)
@@ -259,12 +252,20 @@ class ViT(nn.Module):
         for k in list(state_dict):
             if k.endswith('rope.freqs_cos') or k.endswith('rope.freqs_sin'):
                 state_dict.pop(k)
-        if (weight := state_dict.get('patch_embed.proj.weight')) is not None and weight.ndim == 4:
-            # conv2d weight from EVA-02
-            weight = nnf.interpolate(weight.float(), self.patch_embed.patch_size[1:], mode='bicubic')
-            if not self.adaptive_patch_embed:
-                d = self.patch_embed.patch_size[0]
+        if (weight := state_dict.get('patch_embed.proj.weight')) is not None:
+            d = self.patch_embed.patch_size[0]
+            if weight.ndim == 4:
+                # conv2d weight from EVA-02
+                weight = nnf.interpolate(weight.float(), self.patch_embed.patch_size[1:], mode='bicubic')
                 weight = einops.repeat(weight / d, 'co ci ... -> co ci d ...', d=d)
+            else:
+                # weight from PUMIT
+                weight = einops.reduce(
+                    weight,
+                    'co ci (dr dc) ... -> co ci dr ...',
+                    'sum',
+                    dr=d,
+                )
             state_dict['patch_embed.proj.weight'] = weight
 
         if (pos_embed := state_dict.get('pos_embed')) is not None:

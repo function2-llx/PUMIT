@@ -8,14 +8,13 @@ from tqdm import tqdm
 from luolib.models.decoders.full_res import FullResAdapter
 from luolib.types import tuple3_t
 from luolib.utils.lightning import LightningModule
-from monai.data import MetaTensor
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
-from monai.utils import BlendMode, MetaKeys, MetricReduction
+from monai.utils import BlendMode, MetricReduction
 
 from pumt.model import SimpleViTAdapter
-from pumt.model.vit import resample
+from pumt.sac import resample
 
 class BTCVModel(LightningModule):
     loss_weight: torch.Tensor

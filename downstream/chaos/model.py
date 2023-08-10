@@ -18,7 +18,7 @@ from monai.losses import DiceCELoss
 from monai.utils import BlendMode, ImageMetaKey, MetaKeys
 
 from pumt.model import SimpleViTAdapter
-from pumt.model.vit import resample
+from pumt.sac import resample
 from downstream.chaos.data import save_pred
 
 class CHAOSModel(LightningModule):

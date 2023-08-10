@@ -2,7 +2,6 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from luolib.models.init import init_common
 from luolib.models.layers import LayerNormNd
 from luolib.types import call_partial, partial_t, tuple3_t
 
@@ -72,9 +71,6 @@ class SimpleVQTokenizer(VQTokenizer):
             ],
             sac.InflatableTransposedConv3d(upsample_layer_channels[0], in_channels, kernel_size=output_stride, stride=output_stride),
         )
-
-        # override self.quantize initialization
-        init_common(self)
 
     @property
     def stride(self) -> tuple3_t[int]:

@@ -4,11 +4,12 @@ from collections.abc import Iterable, Sequence
 from typing import Literal
 
 import einops
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as nnf
 
-from luolib.types import param3_t
+from luolib.types import param3_t, tuple3_t
 from monai.utils import InterpolateMode, ensure_tuple_rep
 
 class SpatialTensor(torch.Tensor):
@@ -97,8 +98,8 @@ class InflatableConv3d(nn.Conv3d):
             assert self.stride[0] & self.stride[0] - 1 == 0, 'only support power of 2'
             self.num_downsamples = self.stride[0].bit_length() - 1
             assert self.padding_mode == 'zeros'
-            assert d_inflation in ['average', 'center']
-            self.inflation = d_inflation
+        self.inflation = d_inflation
+        assert d_inflation in ['average', 'center']
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         weight_key = f'{prefix}weight'
@@ -314,3 +315,11 @@ class AdaptiveTransposedConvUpsample(nn.Module):
     def forward(self, x: SpatialTensor):
         x = self.transposed_conv(x)
         return self.conv(x)
+
+def resample(x: torch.Tensor, shape: tuple3_t[int]):
+    downsample_shape = tuple(np.minimum(x.shape[2:], shape))
+    if downsample_shape != x.shape[2:]:
+        x = nnf.interpolate(x, downsample_shape, mode='area')
+    if shape != x.shape[2:]:
+        x = nnf.interpolate(x, shape, mode='trilinear')
+    return x

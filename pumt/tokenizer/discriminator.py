@@ -58,5 +58,3 @@ class SimplePatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
                 nn.LeakyReLU(inplace=True),
             ])
         self.append(sac.InflatableInputConv3d(layer_channels[-1], 1, 3, padding=1))
-
-        init_common(self)
