@@ -4,5 +4,4 @@ init_args:
   adaptive_patch_embed: false
   patch_size: [4, 16, 16]
   pos_embed_shape: [12, 12, 12]
-  aniso_d: 2
   out_indexes: [7, 11, 15, 23]
