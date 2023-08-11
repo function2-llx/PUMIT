@@ -107,6 +107,7 @@ class BTCVModel(LightningModule):
         prob = resample(prob, label.shape[2:])
         pred = prob.argmax(dim=1, keepdim=True)
         self.dice_metric(pred, label)
+        self.log('val/loss', self.loss(prob.log(), label))
 
     def on_validation_epoch_end(self) -> None:
         dice = self.dice_metric.aggregate(MetricReduction.MEAN_BATCH) * 100
