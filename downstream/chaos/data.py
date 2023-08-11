@@ -53,7 +53,11 @@ def save_pred(pred: np.ndarray, save_dir: PathLike, dicom_ref_dir: PathLike):
     dcm_files = sorted(dicom_ref_dir.glob('*.dcm'))
     pred = convert_pred(pred)
     for i in range(pred.shape[2]):
-        Image.fromarray(pred[..., i]).save(save_dir / f'{dcm_files[i].stem}.png')
+        if len(dcm_files) > 0:
+            save_stem = dcm_files[i].stem
+        else:
+            save_stem = f'result{i:03d}'
+        Image.fromarray(pred[..., i]).save(save_dir / f'{save_stem}.png')
 
 class InputTransformD(mt.Transform):
     def __call__(self, data: dict[Hashable, ...]):
