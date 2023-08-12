@@ -139,7 +139,7 @@ class BTCVModel(LightningModule):
         self.dice_metric(pred, label)
         inverse_orientation = lt.AffineOrientation(affine)
         pred = inverse_orientation(pred[0])
-        nib.save(nib.Nifti1Image(pred[0], affine.numpy()), self.test_output_dir / f'{case}.nii.gz')
+        nib.save(nib.Nifti1Image(pred[0].byte().cpu().numpy(), affine.numpy()), self.test_output_dir / f'{case}.nii.gz')
 
     def on_test_epoch_end(self) -> None:
         dice = self.dice_metric.aggregate(MetricReduction.MEAN_BATCH) * 100
