@@ -173,3 +173,38 @@ class BTCVDataModule(LightningDataModule):
     def val_dataloader(self):
         data = load_decathlon_datalist(DATASET_ROOT / 'smit.json', data_list_key='validation')
         return DataLoader(CacheDataset(data, self.val_transform), self.num_workers, pin_memory=True)
+
+    @property
+    def test_transform(self):
+        return mt.Compose(
+            [
+                mt.LoadImageD(['image', 'label'], image_only=True, ensure_channel_first=True),
+                mt.ScaleIntensityRangeD(
+                    'image',
+                    -175, 250, 0., 1.,
+                    clip=True,
+                ),
+                lt.CleverStatsD('image'),
+                mt.OrientationD(['image', 'label'], 'SAR'),
+                mt.SpacingD(
+                    'image', self.spacing, mode=GridSampleMode.BILINEAR, padding_mode=GridSamplePadMode.ZEROS
+                ),
+                InputTransformD(as_tensor=False),
+            ],
+            lazy=True,
+            overrides={
+                # https://github.com/Project-MONAI/MONAI/issues/6850
+                'image': {
+                    'mode': GridSampleMode.BILINEAR,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+                'label': {
+                    'mode': GridSampleMode.NEAREST,
+                    'padding_mode': GridSamplePadMode.ZEROS,
+                },
+            }
+        )
+
+    def test_dataloader(self):
+        data = load_decathlon_datalist(DATASET_ROOT / 'smit.json', data_list_key='validation')
+        return DataLoader(Dataset(data, self.test_transform), self.num_workers, pin_memory=True)

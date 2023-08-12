@@ -1,17 +1,21 @@
 from collections.abc import Sequence
+from pathlib import Path
 
+import nibabel as nib
 import torch
 from torch import nn
 from torch.nn import functional as nnf
 from tqdm import tqdm
 
-from luolib.models.decoders.full_res import FullResAdapter
+from luolib.models.decoders import FullResAdapter
+from luolib import transforms as lt
 from luolib.types import tuple3_t
 from luolib.utils.lightning import LightningModule
+from monai.data import MetaTensor
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
-from monai.utils import BlendMode, MetricReduction
+from monai.utils import BlendMode, ImageMetaKey, MetaKeys, MetricReduction
 
 from pumt.model import SimpleViTAdapter
 from pumt.sac import resample
@@ -55,7 +59,7 @@ class BTCVModel(LightningModule):
         seg_feature_maps = self.decoder(feature_maps, x)[::-1]
         return seg_feature_maps
 
-    def training_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], *args, **kwargs):
         img, label = batch
         img = self.input_norm(img)
         seg_feature_maps = self.get_seg_feature_maps(img)
@@ -100,7 +104,7 @@ class BTCVModel(LightningModule):
     def on_validation_epoch_start(self) -> None:
         self.dice_metric.reset()
 
-    def validation_step(self, batch: tuple[torch.Tensor, ...], *args, **kwargs):
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], *args, **kwargs):
         img, label = batch
         img = self.input_norm(img)
         prob = self.sw_infer(img)
@@ -114,3 +118,31 @@ class BTCVModel(LightningModule):
         for i in range(dice.shape[0]):
             self.log(f'val/dice/{i}', dice[i])
         self.log(f'val/dice/avg', dice[1:].mean())
+
+    @property
+    def test_output_dir(self):
+        return self.run_dir / 'pred'
+
+    def on_test_epoch_start(self) -> None:
+        self.dice_metric.reset()
+        self.test_output_dir.mkdir()
+
+    def test_step(self, batch: tuple[MetaTensor, torch.Tensor], *args, **kwargs):
+        img, label = batch
+        meta = img[0].meta
+        affine = meta[MetaKeys.ORIGINAL_AFFINE]
+        case = Path(meta[ImageMetaKey.FILENAME_OR_OBJ]).name.split('.')[0]
+        img = self.input_norm(img)
+        prob = self.tta_infer(img)
+        prob = resample(prob, label.shape[2:])
+        pred = prob.argmax(dim=1, keepdim=True)
+        self.dice_metric(pred, label)
+        inverse_orientation = lt.AffineOrientation(affine)
+        pred = inverse_orientation(pred[0])
+        nib.save(nib.Nifti1Image(pred[0], affine.numpy()), self.test_output_dir / f'{case}.nii.gz')
+
+    def on_test_epoch_end(self) -> None:
+        dice = self.dice_metric.aggregate(MetricReduction.MEAN_BATCH) * 100
+        for i in range(dice.shape[0]):
+            self.log(f'test/dice/{i}', dice[i])
+        self.log(f'test/dice/avg', dice[1:].mean())
