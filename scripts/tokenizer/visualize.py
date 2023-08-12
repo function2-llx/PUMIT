@@ -7,6 +7,7 @@ from torch.nn import functional as nnf
 from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
+
 from pumt.sac import SpatialTensor
 from pumt.tokenizer import VQTokenizer
 
@@ -19,19 +20,21 @@ def main():
     parser.add_argument('--out_path', type=Path)
     parser.add_argument('--nr', type=int, default=32)
     parser.add_argument('--nc', type=int, default=32)
+    parser.add_argument('--state_dict_key', type=str, default='model')
     args = parser.parse_args()
     args = parser.instantiate_classes(args)
     print(args)
     model: VQTokenizer = args.model.eval()
-    load_ckpt(model, args.ckpt_path, state_dict_key='model')
+    load_ckpt(model, args.ckpt_path, state_dict_key=args.state_dict_key)
     z = einops.rearrange(model.quantize.embedding.weight[:args.nr * args.nc], 'n c -> n c 1 1 1')
     z = SpatialTensor(z, aniso_d=5)
     z.num_downsamples = 4
     with torch.no_grad():
         out = model.decoder(z)
-    out = nnf.pad(out, (1, 1, 1, 1))
+    out = nnf.pad(out, (1, 0, 1, 0), value=0.5)
     print(out.shape)
     out = einops.rearrange(out, '(nr nc) c 1 h w -> c (nr h) (nc w)', nr=args.nr)
+    out = nnf.pad(out, (0, 1, 0, 1), value=0.5)
     print(out.shape)
     save_image(out, args.out_path)
 
