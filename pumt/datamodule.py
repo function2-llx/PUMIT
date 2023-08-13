@@ -7,26 +7,28 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import torch
-from torch.types import Device
 from torch.utils.data import Dataset as TorchDataset, Sampler
 
 from luolib import transforms as lt
 from luolib.types import tuple2_t
 from luolib.utils import DataKey
 from monai.config import PathLike
-from monai.data import Dataset as MONAIDataset, DataLoader
+from monai.data import Dataset as MONAIDataset, DataLoader, MetaTensor
 from monai import transforms as mt
 
 from pumt.reader import PUMTReader
-from pumt.transforms import AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD, ensure_rgb
+from pumt.transforms import (
+    AdaptivePadD, AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD,
+    ensure_rgb,
+)
 
 DATA_ROOT = Path('processed-data')
 
 @dataclass(kw_only=True)
 class DataLoaderConf:
-    train_batch_size: int
+    train_batch_size: int | None = None
     val_batch_size: int = 1  # or help me write another distributed batch sampler for validation
-    num_train_batches: int
+    num_train_batches: int | None = None
     num_workers: int = 8
 
 @dataclass(kw_only=True)
@@ -232,9 +234,9 @@ class PUMTDataModule(LightningDataModule):
 
     @staticmethod
     def collate_fn(batch: list[tuple[torch.Tensor, int, PathLike]]):
-        tensor_list, [aniso_d, *aniso_d_list], paths = zip(*batch)
+        tensor_list, [aniso_d, *aniso_d_list], *info = zip(*batch)
         assert (np.array(aniso_d_list) == aniso_d).all()
-        return torch.stack(tensor_list), aniso_d, paths
+        return torch.stack(tensor_list), aniso_d, *info
 
     def train_dataloader(self, num_skip_batches: int = 0):
         conf = self.dl_conf
@@ -254,17 +256,11 @@ class PUMTDataModule(LightningDataModule):
         )
 
     def val_transform(self) -> Callable:
-        trans_conf = self.trans_conf
         return mt.Compose(
             [
                 mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                CenterScaleCropD(
-                    trans_conf.val_tz,
-                    trans_conf.val_tx,
-                    trans_conf.val_scale_x,
-                    trans_conf.stride,
-                ),
-                AsSpatialTensorD(),
+                UpdateSpacingD(),
+                AdaptivePadD(),
             ],
             lazy=True,
         )

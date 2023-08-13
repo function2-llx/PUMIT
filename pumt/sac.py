@@ -12,6 +12,8 @@ from torch.nn import functional as nnf
 from luolib.types import param3_t, tuple3_t
 from monai.utils import InterpolateMode, ensure_tuple_rep
 
+from pumt.transforms import RGB_TO_GRAY_WEIGHT
+
 class SpatialTensor(torch.Tensor):
     # gradient checkpointing will not work for this class
     # https://github.com/pytorch/pytorch/issues/105644
@@ -181,7 +183,7 @@ class InflatableOutputConv3d(InflatableConv3d):
                     assert weight.shape[0] == 3 and self.out_channels == 1
                     # RGB to grayscale ref: https://www.itu.int/rec/R-REC-BT.601
                     weight = einops.einsum(
-                        weight.new_tensor([0.299, 0.587, 0.114]), weight,
+                        weight.new_tensor(RGB_TO_GRAY_WEIGHT), weight,
                         'c, c ... -> ...'
                     )[None]
 
@@ -196,7 +198,7 @@ class InflatableOutputConv3d(InflatableConv3d):
                         ' -> co', co=co,
                     )
                 case 'RGB_L':
-                    bias = torch.dot(bias.new_tensor([0.299, 0.587, 0.114]), bias)[None]
+                    bias = torch.dot(bias.new_tensor(RGB_TO_GRAY_WEIGHT), bias)[None]
             state_dict[bias_key] = bias
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 

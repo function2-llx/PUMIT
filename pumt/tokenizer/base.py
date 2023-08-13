@@ -54,8 +54,8 @@ class VQTokenizer(ABC, nn.Module):
 
     def tokenize(self, x: sac.SpatialTensor) -> VectorQuantizerOutput:
         z = self.encode(x)
-        quant_out: VectorQuantizerOutput = self.quantize(z)
-        return quant_out
+        vq_out: VectorQuantizerOutput = self.quantize(z)
+        return vq_out
 
     def get_ref_param(self) -> nn.Parameter | None:
         return None

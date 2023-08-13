@@ -8,7 +8,7 @@ import torch
 from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
-from monai.utils import ImageMetaKey, MetaKeys
+from monai.utils import ImageMetaKey
 
 class UpdateSpacingD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
@@ -84,11 +84,13 @@ def ensure_rgb(x: torch.Tensor, enable: bool = True, batched: bool = False) -> t
         x = einops.repeat(x, f'{maybe_batch} 1 ... -> c ...', c=3)
     return x
 
+RGB_TO_GRAY_WEIGHT = (0.299, 0.587, 0.114)
+
 def rgb_to_gray(x: torch.Tensor, batched: bool = False) -> torch.Tensor:
     # RGB to grayscale ref: https://www.itu.int/rec/R-REC-BT.601
     maybe_batch = 'n' if batched else ''
     return einops.rearrange(
-        einops.einsum(x, x.new_tensor([0.299, 0.587, 0.114]), f'{maybe_batch} c ..., c ... -> {maybe_batch} ...'),
+        einops.einsum(x, x.new_tensor(RGB_TO_GRAY_WEIGHT), f'{maybe_batch} c ..., c ... -> {maybe_batch} ...'),
         f'{maybe_batch} ... -> {maybe_batch} 1 ...'
     )
 
@@ -96,3 +98,13 @@ class AsSpatialTensorD(mt.Transform):
     def __call__(self, data: Mapping[Hashable]):
         img: MetaTensor = data[DataKey.IMG]
         return ensure_rgb(img.as_tensor()), data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
+
+class AdaptivePadD(mt.Transform):
+    def __call__(self, data: Mapping):
+        data = dict(data)
+        img: MetaTensor = data[DataKey.IMG]
+        aniso_d = max(int(img.pixdim[0] / min(img.pixdim[1:])).bit_length() - 1, 0)
+        modality = data['modality']
+        pad = mt.DivisiblePad((max(16 >> aniso_d, 1), 16, 16), lazy=True)
+        img = pad(img)
+        return ensure_rgb(img.as_tensor()), aniso_d, modality, img.meta[ImageMetaKey.FILENAME_OR_OBJ]
