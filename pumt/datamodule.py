@@ -259,6 +259,7 @@ class PUMTDataModule(LightningDataModule):
         return mt.Compose([
             mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
             UpdateSpacingD(),
+            mt.CropForegroundD(DataKey.IMG, DataKey.IMG),
             AdaptivePadD(),
         ])
 
