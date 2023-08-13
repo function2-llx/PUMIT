@@ -99,7 +99,7 @@ class AsSpatialTensorD(mt.Transform):
         img: MetaTensor = data[DataKey.IMG]
         return ensure_rgb(img.as_tensor()), data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
 
-class AdaptivePadD(mt.Transform):
+class AdaptivePadD(mt.LazyTransform):
     def __call__(self, data: Mapping):
         data = dict(data)
         img: MetaTensor = data[DataKey.IMG]
