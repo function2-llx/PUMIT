@@ -30,7 +30,7 @@ def main():
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
     x = sac.SpatialTensor(x, 5)
-    model: VQTokenizer = args.model.cuda()
+    model: VQTokenizer = args.model.cuda().eval()
     print(model.training)
 
     load_ckpt(model, args.ckpt_path, state_dict_key=args.state_dict_key)
