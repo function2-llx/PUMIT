@@ -256,14 +256,11 @@ class PUMTDataModule(LightningDataModule):
         )
 
     def val_transform(self) -> Callable:
-        return mt.Compose(
-            [
-                mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
-                UpdateSpacingD(),
-                AdaptivePadD(),
-            ],
-            lazy=True,
-        )
+        return mt.Compose([
+            mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+            UpdateSpacingD(),
+            AdaptivePadD(),
+        ])
 
     def val_dataloader(self):
         conf = self.dl_conf

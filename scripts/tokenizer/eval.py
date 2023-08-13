@@ -62,7 +62,6 @@ def main():
     plt.savefig(output_dir / 'utilization.pdf', bbox_inches='tight', pad_inches=0)
     plt.savefig(output_dir/ 'utilization.png', bbox_inches='tight', pad_inches=0)
     plt.show()
-    np.savetxt()
     Path(output_dir / 'entropy.txt').write_text(str(np.mean(entropy)))
 
 if __name__ == '__main__':
