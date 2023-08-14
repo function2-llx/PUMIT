@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import nibabel as nib
+from nnunetv2.preprocessing.resampling.default_resampling import resample_data_or_seg_to_shape
 import torch
 from torch import nn
 from torch.nn import functional as nnf
@@ -136,7 +137,11 @@ class BTCVModel(LightningModule):
         case = Path(meta[ImageMetaKey.FILENAME_OR_OBJ]).name.split('.')[0]
         img = self.input_norm(img)
         prob = self.tta_infer(img, self.sw_softmax)
-        prob = resample(prob, label.shape[2:])
+        prob = resample_data_or_seg_to_shape(
+            prob[0], label.shape[2:], img[0].pixdim.numpy(), label[0].pixdim.numpy(),
+            False, 1, 0, None,
+        )
+        prob = MetaTensor(prob, img[0].affine).to(label.device)[None]
         pred = prob.argmax(dim=1, keepdim=True)
         self.dice_metric(pred, label)
         inverse_orientation = lt.AffineOrientation(affine)

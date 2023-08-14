@@ -25,7 +25,7 @@ class InputTransformD(mt.Transform):
         img, label = data['image'], data['label']
         if self.as_tensor:
             img = img.as_tensor()
-        return img, label.as_tensor()
+        return img, label
 
 class BTCVDataModule(LightningDataModule):
     def __init__(
