@@ -143,6 +143,7 @@ class BTCVModel(LightningModule):
             prob, meta[MetaKeys.SPATIAL_SHAPE].tolist(), prob.pixdim.numpy(), affine_to_spacing(affine).numpy(),
             False, 1, 0, None,
         )
+        prob = torch.as_tensor(prob, device=label.device)
         pred = prob.argmax(dim=0, keepdim=True)
         self.dice_metric(pred[None], label)
         nib.save(nib.Nifti1Image(pred[0].byte().cpu().numpy(), affine.numpy()), self.test_output_dir / f'{case}.nii.gz')

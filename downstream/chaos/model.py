@@ -114,13 +114,13 @@ class CHAOSModel(LightningModule):
             prob, meta[MetaKeys.SPATIAL_SHAPE].tolist(), prob.pixdim.numpy(), affine_to_spacing(affine).numpy(),
             False, 1, 0, None,
         )
-        pred = prob.argmax(dim=0).byte()
+        pred = prob.argmax(axis=0)
         dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
         if modality == 'T1DUAL':
             dicom_ref_dir /= 'InPhase'
-        save_pred(pred.cpu().numpy(), self.predict_save_dir / 'Task5' / img_rel_path / 'Results', dicom_ref_dir)
+        save_pred(pred, self.predict_save_dir / 'Task5' / img_rel_path / 'Results', dicom_ref_dir)
         pred[pred != 1] = 0
-        save_pred(pred.cpu().numpy(), self.predict_save_dir / 'Task3' / img_rel_path / 'Results', dicom_ref_dir)
+        save_pred(pred, self.predict_save_dir / 'Task3' / img_rel_path / 'Results', dicom_ref_dir)
 
     def on_predict_end(self) -> None:
         shutil.make_archive(
