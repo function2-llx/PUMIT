@@ -165,3 +165,6 @@ output
 scripts/_local
 PUMT-normalized
 processed-data
+tokenizer-eval*
+nnUNet-data
+btcv-eval

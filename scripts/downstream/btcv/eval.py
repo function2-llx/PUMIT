@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 from jsonargparse import ArgumentParser
-import torch
 from tqdm import tqdm
 
 from monai import transforms as mt
@@ -21,8 +20,8 @@ def main():
     args = parser.parse_args()
     metrics = [
         ('dice', DiceMetric(False, MetricReduction.NONE)),
-        ('msd', SurfaceDistanceMetric(False, True, 'euclidean', reduction=MetricReduction.NONE, no_inf=True)),
-        ('hd', HausdorffDistanceMetric(False, 'euclidean', 99.5, False, MetricReduction.NONE)),
+        ('msd', SurfaceDistanceMetric(False, True, set_nan=True)),
+        ('hd', HausdorffDistanceMetric(False, directed=False, set_nan=True)),
     ]
     data = load_decathlon_datalist(args.datalist_path, data_list_key='validation', base_dir=args.data_dir)
     loader = mt.Compose([
