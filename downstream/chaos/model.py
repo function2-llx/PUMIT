@@ -114,11 +114,8 @@ class CHAOSModel(LightningModule):
         affine = meta[MetaKeys.ORIGINAL_AFFINE]
         inverse_orientation = lt.AffineOrientation(affine)
         pred = inverse_orientation(pred)
-        pred = resample_data_or_seg_to_shape(
-            pred, meta[MetaKeys.SPATIAL_SHAPE].tolist(), pred.pixdim.numpy(), affine_to_spacing(affine).numpy(),
-            False, 1, 0, None,
-        )
-        pred = pred.argmax(axis=0)
+        pred = nnf.interpolate(pred[None], size=tuple(meta[MetaKeys.SPATIAL_SHAPE].tolist()), mode='trilinear')[0]
+        pred = pred.argmax(axis=0).cpu().numpy()
         dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
         if modality == 'T1DUAL':
             dicom_ref_dir /= 'InPhase'
