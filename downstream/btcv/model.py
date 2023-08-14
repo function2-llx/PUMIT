@@ -90,11 +90,11 @@ class BTCVModel(LightningModule):
             y = y.softmax(dim=1)
         return y
 
-    def tta_infer(self, x: torch.Tensor, soft_max: bool = True):
+    def tta_infer(self, x: torch.Tensor, softmax: bool = True):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
         out = None
         for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference'):
-            cur_out = self.sw_infer(torch.flip(x, flip_idx) if flip_idx else x, soft_max)
+            cur_out = self.sw_infer(torch.flip(x, flip_idx) if flip_idx else x, softmax)
             if flip_idx:
                 cur_out = torch.flip(cur_out, flip_idx)
             if out is None:

@@ -34,6 +34,7 @@ class CHAOSModel(LightningModule):
         sample_size: tuple3_t[int],
         sw_batch_size: int = 4,
         sw_overlap: float = 0.5,
+        sw_softmax: bool = True,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -49,6 +50,7 @@ class CHAOSModel(LightningModule):
         self.sample_size = sample_size
         self.sw_batch_size = sw_batch_size
         self.sw_overlap = sw_overlap
+        self.sw_softmax = sw_softmax
 
     def get_seg_feature_maps(self, x: torch.Tensor):
         feature_maps = self.backbone(x)
@@ -73,7 +75,7 @@ class CHAOSModel(LightningModule):
 
     def forward(self, x: torch.Tensor):
         seg_feature_map = self.get_seg_feature_maps(x)[0]
-        return self.seg_heads[0](seg_feature_map).softmax(dim=1)
+        return self.seg_heads[0](seg_feature_map)
 
     @property
     def predict_save_dir(self):
@@ -82,22 +84,24 @@ class CHAOSModel(LightningModule):
     def on_predict_start(self) -> None:
         extract_template(self.predict_save_dir)
 
-    def tta_infer(self, x: torch.Tensor):
+    def tta_infer(self, x: torch.Tensor, softmax: bool = True):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
-        prob = None
+        out = None
         for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference', disable=True):
-            cur_prob = sliding_window_inference(
+            cur_out = sliding_window_inference(
                 torch.flip(x, flip_idx) if flip_idx else x,
                 self.sample_size, self.sw_batch_size, self, self.sw_overlap, BlendMode.GAUSSIAN,
             )
+            if softmax:
+                cur_out = cur_out.softmax(dim=1)
             if flip_idx:
-                cur_prob = torch.flip(cur_prob, flip_idx)
-            if prob is None:
-                prob = cur_prob
+                cur_out = torch.flip(cur_out, flip_idx)
+            if out is None:
+                out = cur_out
             else:
-                prob += cur_prob
-        prob /= len(tta_flips)
-        return prob
+                out += cur_out
+        out /= len(tta_flips)
+        return out
 
     def predict_step(self, batch: tuple[torch.Tensor, ...], batch_idx: int, dataloader_idx: int = 0):
         img, mean, std = batch
@@ -106,15 +110,15 @@ class CHAOSModel(LightningModule):
         original_path = Path(meta[ImageMetaKey.FILENAME_OR_OBJ])
         split, num, modality = original_path.parts[-4:-1]
         img_rel_path = f'MR/{num}/{modality}'
-        prob = self.tta_infer(img)[0]
+        pred = self.tta_infer(img, self.sw_softmax)[0]
         affine = meta[MetaKeys.ORIGINAL_AFFINE]
         inverse_orientation = lt.AffineOrientation(affine)
-        prob = inverse_orientation(prob)
-        prob = resample_data_or_seg_to_shape(
-            prob, meta[MetaKeys.SPATIAL_SHAPE].tolist(), prob.pixdim.numpy(), affine_to_spacing(affine).numpy(),
+        pred = inverse_orientation(pred)
+        pred = resample_data_or_seg_to_shape(
+            pred, meta[MetaKeys.SPATIAL_SHAPE].tolist(), pred.pixdim.numpy(), affine_to_spacing(affine).numpy(),
             False, 1, 0, None,
         )
-        pred = prob.argmax(axis=0)
+        pred = pred.argmax(axis=0)
         dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
         if modality == 'T1DUAL':
             dicom_ref_dir /= 'InPhase'
