@@ -1,5 +1,6 @@
 from collections.abc import Hashable
 from pathlib import Path
+from zipfile import ZipFile
 
 from PIL import Image
 import einops
@@ -47,14 +48,17 @@ def read_label(label_dir: PathLike):
     label = convert_label(label)
     return label.astype(np.uint8)
 
-def save_pred(pred: np.ndarray, save_dir: PathLike, dicom_ref_dir: PathLike):
+def save_pred(pred: np.ndarray, save_dir: PathLike, dicom_ref_dir: PathLike | None = None):
     save_dir = Path(save_dir)
-    dicom_ref_dir = Path(dicom_ref_dir)
-    dcm_files = sorted(dicom_ref_dir.glob('*.dcm'))
+    if dicom_ref_dir is not None:
+        dicom_ref_dir = Path(dicom_ref_dir)
+        dcm_ref_files = sorted(dicom_ref_dir.glob('*.dcm'))
+    else:
+        dcm_ref_files = []
     pred = convert_pred(pred)
     for i in range(pred.shape[2]):
-        if len(dcm_files) > 0:
-            save_stem = dcm_files[i].stem
+        if len(dcm_ref_files) > 0:
+            save_stem = dcm_ref_files[i].stem
         else:
             save_stem = f'result{i:03d}'
         Image.fromarray(pred[..., i]).save(save_dir / f'{save_stem}.png')
@@ -208,3 +212,7 @@ class CHAOSDataModule(LightningDataModule):
         ]
         train_dataloader = DataLoader(Dataset(train_data, self.predict_test_transform), self.num_workers, pin_memory=True)
         return test_dataloader, train_dataloader
+
+def extract_template(dst: Path):
+    with ZipFile(Path(__file__).parent / 'CHAOS_submission_template_new.zip') as zipf:
+        zipf.extractall(dst)

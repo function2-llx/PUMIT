@@ -25,7 +25,7 @@ class InputTransformD(mt.Transform):
         img, label = data['image'], data['label']
         if self.as_tensor:
             img = img.as_tensor()
-        return img, label
+        return img, label.as_tensor()
 
 class BTCVDataModule(LightningDataModule):
     def __init__(
@@ -185,7 +185,7 @@ class BTCVDataModule(LightningDataModule):
                     clip=True,
                 ),
                 lt.CleverStatsD('image'),
-                mt.OrientationD(['image', 'label'], 'SAR'),
+                mt.OrientationD('image', 'SAR'),
                 mt.SpacingD(
                     'image', self.spacing, mode=GridSampleMode.BILINEAR, padding_mode=GridSamplePadMode.ZEROS
                 ),

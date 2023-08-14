@@ -12,7 +12,7 @@ from luolib.models.decoders import FullResAdapter
 from luolib import transforms as lt
 from luolib.types import tuple3_t
 from luolib.utils.lightning import LightningModule
-from monai.data import MetaTensor
+from monai.data import MetaTensor, affine_to_spacing
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
@@ -133,19 +133,18 @@ class BTCVModel(LightningModule):
     def test_step(self, batch: tuple[MetaTensor, torch.Tensor], *args, **kwargs):
         img, label = batch
         meta = img[0].meta
-        affine = meta[MetaKeys.ORIGINAL_AFFINE]
         case = Path(meta[ImageMetaKey.FILENAME_OR_OBJ]).name.split('.')[0]
         img = self.input_norm(img)
-        prob = self.tta_infer(img, self.sw_softmax)
+        prob = self.tta_infer(img, self.sw_softmax)[0]
+        affine = meta[MetaKeys.ORIGINAL_AFFINE]
+        inverse_orientation = lt.AffineOrientation(affine)
+        prob = inverse_orientation(prob)
         prob = resample_data_or_seg_to_shape(
-            prob[0], label.shape[2:], img[0].pixdim.numpy(), label[0].pixdim.numpy(),
+            prob, meta[MetaKeys.SPATIAL_SHAPE].tolist(), prob.pixdim.numpy(), affine_to_spacing(affine).numpy(),
             False, 1, 0, None,
         )
-        prob = MetaTensor(prob, img[0].affine).to(label.device)[None]
-        pred = prob.argmax(dim=1, keepdim=True)
-        self.dice_metric(pred, label)
-        inverse_orientation = lt.AffineOrientation(affine)
-        pred = inverse_orientation(pred[0])
+        pred = prob.argmax(dim=0, keepdim=True)
+        self.dice_metric(pred[None], label)
         nib.save(nib.Nifti1Image(pred[0].byte().cpu().numpy(), affine.numpy()), self.test_output_dir / f'{case}.nii.gz')
 
     def on_test_epoch_end(self) -> None:

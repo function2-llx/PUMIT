@@ -1,8 +1,8 @@
 from collections.abc import Sequence
 from pathlib import Path
 import shutil
-from zipfile import ZipFile
 
+from nnunetv2.preprocessing.resampling.default_resampling import resample_data_or_seg_to_shape
 import torch
 from torch import nn
 from torch.nn import functional as nnf
@@ -12,14 +12,13 @@ from luolib import transforms as lt
 from luolib.models.decoders.full_res import FullResAdapter
 from luolib.types import tuple3_t
 from luolib.utils.lightning import LightningModule
-from monai.data import MetaTensor
+from monai.data import MetaTensor, affine_to_spacing
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.utils import BlendMode, ImageMetaKey, MetaKeys
 
 from pumt.model import SimpleViTAdapter
-from pumt.sac import resample
-from downstream.chaos.data import save_pred
+from downstream.chaos.data import extract_template, save_pred
 
 class CHAOSModel(LightningModule):
     loss_weight: torch.Tensor
@@ -81,8 +80,7 @@ class CHAOSModel(LightningModule):
         return self.run_dir / 'submit'
 
     def on_predict_start(self) -> None:
-        with ZipFile(Path(__file__).parent / 'CHAOS_submission_template_new.zip') as zipf:
-            zipf.extractall(self.predict_save_dir)
+        extract_template(self.predict_save_dir)
 
     def tta_infer(self, x: torch.Tensor):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
@@ -109,9 +107,13 @@ class CHAOSModel(LightningModule):
         split, num, modality = original_path.parts[-4:-1]
         img_rel_path = f'MR/{num}/{modality}'
         prob = self.tta_infer(img)[0]
-        inverse_orientation = lt.AffineOrientation(meta[MetaKeys.ORIGINAL_AFFINE])
+        affine = meta[MetaKeys.ORIGINAL_AFFINE]
+        inverse_orientation = lt.AffineOrientation(affine)
         prob = inverse_orientation(prob)
-        prob = resample(prob[None], tuple(meta[MetaKeys.SPATIAL_SHAPE].tolist()))[0]
+        prob = resample_data_or_seg_to_shape(
+            prob, meta[MetaKeys.SPATIAL_SHAPE].tolist(), prob.pixdim.numpy(), affine_to_spacing(affine).numpy(),
+            False, 1, 0, None,
+        )
         pred = prob.argmax(dim=0).byte()
         dicom_ref_dir = Path(f'datasets/CHAOS/{split}_Sets') / img_rel_path / 'DICOM_anon'
         if modality == 'T1DUAL':
