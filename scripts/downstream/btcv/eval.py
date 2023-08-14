@@ -17,6 +17,7 @@ def main():
     parser.add_argument('pred_dir', type=Path)
     parser.add_argument('data_dir', type=Path, default='downstream/data/BTCV')
     parser.add_argument('datalist_path', type=Path, default='downstream/data/BTCV/smit.json')
+    parser.add_argument('--prefix', type=str, default='img')
     args = parser.parse_args()
     metrics = [
         ('dice', DiceMetric(False, MetricReduction.NONE)),
@@ -32,7 +33,7 @@ def main():
     for case in tqdm(data, ncols=80):
         case_id = Path(case['image']).name.split('.', 1)[0][-4:]
         label = one_hot(loader(case['label'])[None], num_fg_classes + 1)
-        pred = one_hot(loader(args.pred_dir / f'img{case_id}.nii.gz')[None], num_fg_classes + 1)
+        pred = one_hot(loader(args.pred_dir / f'{args.prefix}{case_id}.nii.gz')[None], num_fg_classes + 1)
         for _, metric in metrics:
             metric(pred, label)
     ret = {}

@@ -34,6 +34,7 @@ class BTCVModel(LightningModule):
         sample_size: tuple3_t[int],
         sw_batch_size: int = 4,
         sw_overlap: float = 0.5,
+        sw_softmax: bool = True,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -49,6 +50,7 @@ class BTCVModel(LightningModule):
         self.sample_size = sample_size
         self.sw_batch_size = sw_batch_size
         self.sw_overlap = sw_overlap
+        self.sw_softmax = sw_softmax
         self.dice_metric = DiceMetric(num_classes=num_fg_classes + 1)
 
     def input_norm(self, x: torch.Tensor):
@@ -87,19 +89,19 @@ class BTCVModel(LightningModule):
             y = y.softmax(dim=1)
         return y
 
-    def tta_infer(self, x: torch.Tensor):
+    def tta_infer(self, x: torch.Tensor, soft_max: bool = True):
         tta_flips = [[], [2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
-        prob = None
+        out = None
         for flip_idx in tqdm(tta_flips, ncols=80, desc='tta inference'):
-            cur_prob = self.sw_infer(torch.flip(x, flip_idx) if flip_idx else x)
+            cur_out = self.sw_infer(torch.flip(x, flip_idx) if flip_idx else x, soft_max)
             if flip_idx:
-                cur_prob = torch.flip(cur_prob, flip_idx)
-            if prob is None:
-                prob = cur_prob
+                cur_out = torch.flip(cur_out, flip_idx)
+            if out is None:
+                out = cur_out
             else:
-                prob += cur_prob
-        prob /= len(tta_flips)
-        return prob
+                out += cur_out
+        out /= len(tta_flips)
+        return out
 
     def on_validation_epoch_start(self) -> None:
         self.dice_metric.reset()
@@ -107,7 +109,7 @@ class BTCVModel(LightningModule):
     def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], *args, **kwargs):
         img, label = batch
         img = self.input_norm(img)
-        prob = self.sw_infer(img)
+        prob = self.sw_infer(img, self.sw_softmax)
         prob = resample(prob, label.shape[2:])
         pred = prob.argmax(dim=1, keepdim=True)
         self.dice_metric(pred, label)
@@ -133,7 +135,7 @@ class BTCVModel(LightningModule):
         affine = meta[MetaKeys.ORIGINAL_AFFINE]
         case = Path(meta[ImageMetaKey.FILENAME_OR_OBJ]).name.split('.')[0]
         img = self.input_norm(img)
-        prob = self.tta_infer(img)
+        prob = self.tta_infer(img, self.sw_softmax)
         prob = resample(prob, label.shape[2:])
         pred = prob.argmax(dim=1, keepdim=True)
         self.dice_metric(pred, label)
