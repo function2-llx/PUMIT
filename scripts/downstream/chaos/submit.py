@@ -1,6 +1,7 @@
 # convert nnU-Net output to CHAOS submission format
 
 from pathlib import Path
+import shutil
 
 import nibabel as nib
 from jsonargparse import ArgumentParser
@@ -25,6 +26,10 @@ def main():
                 save_pred(pred, args.dst / 'Task5' / img_rel_path / 'Results')
                 pred[pred != 1] = 0
                 save_pred(pred, args.dst / 'Task3' / img_rel_path / 'Results')
+    shutil.make_archive(
+        str(args.dst / 'submit'), 'zip', args.dst, '.',
+        verbose=True,
+    )
 
 if __name__ == '__main__':
     main()
