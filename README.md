@@ -48,12 +48,30 @@ Execute scripts under `scripts/downstream/medmnistv2` for training and evaluatio
 
 ### BTCV Segmentation
 
+Download the BTCV data from the [official challenge](https://www.synapse.org/#!Synapse:syn3193805), and download the train/validation split file from [SMIT's repository](https://github.com/The-Veeraraghavan-Lab/SMIT/blob/5d81399010dcf8c03a944544dc42b62603075b13/dataset/dataset_0.json), organize the files as following: 
+
+```plain
+data
+├── BTCV
+│   ├── smit.json
+│   ├── Testing
+│   └── Training
+```
+
+Then run fine-tuning and inference:
+
 ```zsh
 scripts/downstream/btcv/pumit-b.zsh --data.num_workers 10 --data.ratio 1 --trainer.logger.name pumit-b --data.train_batch_size 4
+scripts/downstream/btcv/test-b.zsh --data.num_workers 10 --ckpt_path <output checkpoint path> --trainer.logger.name pumit-b
 ```
 
 ### CHAOS Segmentation
 
+First, run the pre-processing script to convert the DICOM series into NIFTI format: `python scripts/downstream/chaos/preprocess.py`
+
+Then run fine-tuning and inference:
+
 ```zsh
 scripts/downstream/chaos/pumit-b.zsh --data.num_workers 10 --data.ratio 1 --trainer.logger.name pumit-b --data.train_batch_size 8
+scripts/downstream/chaos/predict-b.zsh --data.num_workers 10 --ckpt_path <output checkpoint path> --trainer.logger.name pumit-b
 ```
