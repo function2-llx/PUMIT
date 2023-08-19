@@ -15,9 +15,9 @@ from mylib.utils.grad import grad_norm
 from mylib.utils.lightning import LightningModule
 from monai.config import PathLike
 
-from pumt import sac
-from pumt.optim import build_lr_scheduler, build_optimizer
-from pumt.tokenizer import VQTokenizer
+from pumit import sac
+from pumit.optim import build_lr_scheduler, build_optimizer
+from pumit.tokenizer import VQTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):

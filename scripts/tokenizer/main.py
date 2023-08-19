@@ -15,10 +15,10 @@ from tqdm import tqdm
 from mylib.models.utils import load_ckpt
 from mylib.types import LRSchedulerConfig
 
-from pumt import sac
-from pumt.datamodule import PUMTDataModule
-from pumt.optim import build_optimizer, build_lr_scheduler
-from pumt.tokenizer import VQGANLoss, VQTokenizer
+from pumit import sac
+from pumit.datamodule import PUMTDataModule
+from pumit.optim import build_optimizer, build_lr_scheduler
+from pumit.tokenizer import VQGANLoss, VQTokenizer
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106

@@ -1,6 +1,6 @@
 seed_everything: 42
 model:
-  class_path: pumt.tokenizer.VQGAN
+  class_path: pumit.tokenizer.VQGAN
   init_args:
     z_channels: 256
     embedding_dim: 256
@@ -50,7 +50,7 @@ model:
       frequency: 100
     ckpt_path: pre-trained/vqgan-gumbel-f8.ckpt
 data:
-  class_path: pumt.tokenizer.TokenizerDataModule
+  class_path: pumit.tokenizer.TokenizerDataModule
   init_args:
     dataset_weights:
       CheXpert: 0.1

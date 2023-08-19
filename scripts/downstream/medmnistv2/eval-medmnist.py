@@ -275,9 +275,9 @@ if __name__ == "__main__":
         encoder = student.transformer
         model = UniMiSSClassifier(encoder, n_classes, args.interpolate)
     elif args.arch == "EVA_02_B":
-        from pumt.model import ViT
-        from pumt.model.vit import Checkpoint
-        from pumt.sac import SpatialTensor
+        from pumit.model import ViT
+        from pumit.model.vit import Checkpoint
+        from pumit.sac import SpatialTensor
 
         ckpt = Checkpoint(path=args.model_path, state_dict_key="module")
         encoder = ViT(
@@ -318,9 +318,9 @@ if __name__ == "__main__":
         encoder.load_state_dict(ckpt, strict=False)
         model = SMITClassifier(encoder, n_classes, args.interpolate)
     elif args.arch == "PUMIT":
-        from pumt.model import ViT
-        from pumt.model.vit import Checkpoint
-        from pumt.sac import SpatialTensor
+        from pumit.model import ViT
+        from pumit.model.vit import Checkpoint
+        from pumit.sac import SpatialTensor
 
         ckpt = Checkpoint(path=args.model_path)
         encoder = ViT(

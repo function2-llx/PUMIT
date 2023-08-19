@@ -16,8 +16,8 @@ from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader, MetaTensor
 from monai import transforms as mt
 
-from pumt.reader import PUMTReader
-from pumt.transforms import (
+from pumit.reader import PUMTReader
+from pumit.transforms import (
     AdaptivePadD, AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD,
     ensure_rgb,
 )

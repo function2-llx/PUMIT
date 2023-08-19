@@ -12,7 +12,7 @@ from mylib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
 from monai.transforms import ToTensorD
-from pumt.reader import PUMTReader
+from pumit.reader import PUMTReader
 
 class NormalizeIntensityD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):

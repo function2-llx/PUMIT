@@ -17,7 +17,7 @@ interpolate = True
 for (i, db) in enumerate(databases):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(2)
     os.system(
-        f"python scripts/evaluation/eval-medmnist.py --model_path /home/function2/PUMT/pre-trained/pumit-b.ckpt \
+        f"python scripts/evaluation/eval-medmnist.py --model_path pre-trained/pumit-b.ckpt \
         --arch PUMIT --data_flag {db} --run lr_{lr:.0e} --lr {lr}"
         + (
         " --interpolate"

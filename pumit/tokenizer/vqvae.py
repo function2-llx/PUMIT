@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 
 from mylib.types import tuple3_t
 
-from pumt import sac
+from pumit import sac
 from .base import VQTokenizer
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):

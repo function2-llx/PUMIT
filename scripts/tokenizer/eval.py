@@ -10,10 +10,10 @@ from torchvision.utils import save_image
 from tqdm import tqdm
 
 from mylib.models import load_ckpt
-from pumt import PUMTDataModule
-from pumt.sac import SpatialTensor
-from pumt.tokenizer import VQTokenizer
-from pumt.transforms import rgb_to_gray
+from pumit import PUMTDataModule
+from pumit.sac import SpatialTensor
+from pumit.tokenizer import VQTokenizer
+from pumit.transforms import rgb_to_gray
 
 output_dir = Path('tokenizer-eval')
 

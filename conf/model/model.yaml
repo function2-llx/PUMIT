@@ -1,4 +1,4 @@
-class_path: pumt.model.ViTForMIM
+class_path: pumit.model.ViTForMIM
 init_args:
   patch_embed_grad_scale: 0.1
   pos_embed_shape: [5, 10, 10]

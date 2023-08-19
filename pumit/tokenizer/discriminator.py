@@ -2,7 +2,7 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from pumt import sac
+from pumit import sac
 
 class PatchDiscriminatorBase(nn.Module):
     pass

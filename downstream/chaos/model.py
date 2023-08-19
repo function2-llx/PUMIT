@@ -17,7 +17,7 @@ from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss
 from monai.utils import BlendMode, ImageMetaKey, MetaKeys
 
-from pumt.model import SimpleViTAdapter
+from pumit.model import SimpleViTAdapter
 from downstream.chaos.data import extract_template, save_pred
 
 class CHAOSModel(LightningModule):

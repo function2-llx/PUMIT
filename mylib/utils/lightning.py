@@ -14,7 +14,7 @@ from timm.scheduler.scheduler import Scheduler as TIMMScheduler
 from torch.optim import Optimizer
 
 from mylib.types import LRSchedulerConfig
-from pumt.optim import build_lr_scheduler, build_optimizer
+from pumit.optim import build_lr_scheduler, build_optimizer
 
 class LightningModule(LightningModuleBase):
     optimizer: Mapping

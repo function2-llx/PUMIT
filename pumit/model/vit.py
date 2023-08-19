@@ -14,8 +14,8 @@ from mylib.models import load_ckpt
 from mylib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
-from pumt import sac
-from pumt.sac import resample
+from pumit import sac
+from pumit.sac import resample
 from .rope import SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
