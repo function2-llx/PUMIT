@@ -5,7 +5,7 @@ import nibabel as nib
 import torch
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
+from mylib.models import load_ckpt
 from monai import transforms as mt
 from monai.data import MetaTensor
 from pumt import sac

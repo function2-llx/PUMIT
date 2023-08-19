@@ -8,8 +8,8 @@ from lightning import LightningDataModule
 import numpy as np
 from torch.utils.data import RandomSampler
 
-from luolib import transforms as lt
-from luolib.types import tuple3_t
+from mylib import transforms as lt
+from mylib.types import tuple3_t
 from monai import transforms as mt
 from monai.config import PathLike
 from monai.data import CacheDataset, DataLoader, Dataset

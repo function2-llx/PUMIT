@@ -9,8 +9,8 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from luolib.models import load_ckpt
-from luolib.types import tuple3_t
+from mylib.models import load_ckpt
+from mylib.types import tuple3_t
 
 from pumt import sac
 from .quantize import VectorQuantizer, VectorQuantizerOutput

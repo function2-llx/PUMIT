@@ -1,6 +1,6 @@
 import torch
 
-from luolib.utils.lightning import LightningCLI
+from mylib.utils.lightning import LightningCLI
 
 class CLI(LightningCLI):
     def add_arguments_to_parser(self, parser):

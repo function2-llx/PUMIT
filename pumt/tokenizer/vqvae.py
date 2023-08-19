@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
-from luolib.types import tuple3_t
+from mylib.types import tuple3_t
 
 from pumt import sac
 from .base import VQTokenizer

@@ -9,7 +9,7 @@ import torch
 from torchvision.utils import save_image
 from tqdm import tqdm
 
-from luolib.models import load_ckpt
+from mylib.models import load_ckpt
 from pumt import PUMTDataModule
 from pumt.sac import SpatialTensor
 from pumt.tokenizer import VQTokenizer

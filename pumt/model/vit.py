@@ -10,8 +10,8 @@ from torch.nn import functional as nnf
 from torch.utils import checkpoint
 from xformers import ops as xops
 
-from luolib.models import load_ckpt
-from luolib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
+from mylib.models import load_ckpt
+from mylib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
 from pumt import sac

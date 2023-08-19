@@ -12,8 +12,8 @@ from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
 
-from luolib.models.utils import load_ckpt
-from luolib.types import LRSchedulerConfig
+from mylib.models.utils import load_ckpt
+from mylib.types import LRSchedulerConfig
 
 from pumt import sac
 from pumt.datamodule import PUMTDataModule

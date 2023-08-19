@@ -2,8 +2,8 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from luolib.models.layers import LayerNormNd
-from luolib.types import call_partial, partial_t, tuple3_t
+from mylib.models.layers import LayerNormNd
+from mylib.types import call_partial, partial_t, tuple3_t
 
 from pumt import sac
 from .base import VQTokenizer

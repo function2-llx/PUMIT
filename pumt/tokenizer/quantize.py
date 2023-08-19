@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional as nnf
 
-from luolib.utils import channel_first, channel_last
+from mylib.utils import channel_first, channel_last
 
 @dataclass
 class VectorQuantizerOutput:

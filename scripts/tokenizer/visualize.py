@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as nnf
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
+from mylib.models import load_ckpt
 
 from pumt.sac import SpatialTensor
 from pumt.tokenizer import VQTokenizer

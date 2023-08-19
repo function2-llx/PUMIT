@@ -2,10 +2,10 @@ class_path: downstream.btcv.BTCVModel
 init_args:
   backbone: backbone-b.yaml
   decoder:
-    class_path: luolib.models.decoders.FullResAdapter
+    class_path: mylib.models.decoders.FullResAdapter
     init_args:
       inner:
-        class_path: luolib.models.decoders.PlainConvUNetDecoder
+        class_path: mylib.models.decoders.PlainConvUNetDecoder
         init_args:
           spatial_dims: 3
           layer_channels: [128, 256, 512, 512]

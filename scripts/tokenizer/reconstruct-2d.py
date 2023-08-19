@@ -7,7 +7,7 @@ import torch
 from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
+from mylib.models import load_ckpt
 from pumt import sac
 from pumt.tokenizer import VQTokenizer
 

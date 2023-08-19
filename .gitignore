@@ -168,3 +168,4 @@ processed-data
 tokenizer-eval*
 nnUNet-data
 btcv-eval
+cls.zip

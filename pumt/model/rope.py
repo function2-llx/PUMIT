@@ -4,7 +4,7 @@ import einops
 import torch
 from torch import nn
 
-from luolib.types import tuple3_t
+from mylib.types import tuple3_t
 from monai.utils import fall_back_tuple
 
 def broadcast_cat(a: torch.Tensor, b: torch.Tensor, dim: int = -1):

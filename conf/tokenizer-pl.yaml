@@ -90,7 +90,7 @@ trainer:
   log_every_n_steps: 25
   benchmark: true
   plugins:
-  - class_path: luolib.plugins.MOAGCMixedPrecisionPlugin
+  - class_path: mylib.plugins.MOAGCMixedPrecisionPlugin
     init_args:
       precision: 16-mixed
       device: cuda

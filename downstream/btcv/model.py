@@ -8,10 +8,10 @@ from torch import nn
 from torch.nn import functional as nnf
 from tqdm import tqdm
 
-from luolib.models.decoders import FullResAdapter
-from luolib import transforms as lt
-from luolib.types import tuple3_t
-from luolib.utils.lightning import LightningModule
+from mylib.models.decoders import FullResAdapter
+from mylib import transforms as lt
+from mylib.types import tuple3_t
+from mylib.utils.lightning import LightningModule
 from monai.data import MetaTensor, affine_to_spacing
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss

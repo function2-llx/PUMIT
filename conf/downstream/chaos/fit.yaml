@@ -18,13 +18,13 @@ trainer:
   - class_path: lightning.pytorch.callbacks.ModelSummary
     init_args:
       max_depth: 2
-  - class_path: luolib.utils.lightning.ModelCheckpoint
+  - class_path: mylib.utils.lightning.ModelCheckpoint
     init_args:
       every_n_train_steps: 10000
       save_top_k: -1
       verbose: false
       filename: "{step}"
-  - class_path: luolib.utils.lightning.ModelCheckpoint
+  - class_path: mylib.utils.lightning.ModelCheckpoint
     init_args:
       every_n_train_steps: 1000
       save_last: true
