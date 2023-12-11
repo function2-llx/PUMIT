@@ -30,5 +30,5 @@ dependencies:
 - pip:
   - cytoolz
   - pynrrd
-  - jsonargparse[signatures]  # for lightning CLI
+  - jsonargparse[signatures]
   - xformers
