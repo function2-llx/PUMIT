@@ -16,7 +16,7 @@ from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
 
 from pumit import sac
-from pumit.datamodule import pumitDataModule
+from pumit.datamodule import PUMITDataModule
 from pumit.optim import build_optimizer, build_lr_scheduler
 from pumit.tokenizer import VQGANLoss, VQTokenizer
 
@@ -66,7 +66,7 @@ def get_parser():
     parser.add_class_arguments(VQGANLoss, 'loss')
     parser.add_argument('--optimizer_d', type=dict)
     parser.add_argument('--lr_scheduler_d', type=LRSchedulerConfig)
-    parser.add_class_arguments(pumitDataModule, 'data')
+    parser.add_class_arguments(PUMITDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
     parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
     parser.link_arguments('training.seed', 'data.seed')
@@ -186,7 +186,7 @@ def main():
     model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
-    datamodule: pumitDataModule = args.data
+    datamodule: PUMITDataModule = args.data
     datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(optimized_steps),

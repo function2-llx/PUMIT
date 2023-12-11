@@ -134,7 +134,7 @@ class VQGANLoss(nn.Module):
         else:
             gan_weight = 0
         loss = vq_loss + gan_weight * gan_loss
-        log_dict =  {
+        log_dict = {
             'loss': loss,
             'rec_loss': rec_loss,
             'perceptual_loss': perceptual_loss,

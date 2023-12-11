@@ -25,7 +25,7 @@ class VectorQuantizer(nn.Module):
         self,
         num_embeddings: int,
         embedding_dim: int,
-        mode: Literal['nearest', 'gumbel', 'soft'],
+        mode: Literal['nearest', 'gumbel', 'soft'] | int,
         in_channels: int | None = None,
         beta: float = 0.25,
         hard_gumbel: bool = True,

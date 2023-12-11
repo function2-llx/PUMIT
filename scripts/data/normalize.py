@@ -12,7 +12,7 @@ from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
 from monai.transforms import ToTensorD
-from pumit.reader import pumitReader
+from pumit.reader import PumitReader
 
 class NormalizeIntensityD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
@@ -30,7 +30,7 @@ class NormalizeIntensityD(mt.Transform):
 src_dir = Path('datasets-pumit')
 save_dir = Path('pumit-normalized-verse-test')
 
-loader = mt.LoadImageD(DataKey.IMG, pumitReader, image_only=True)
+loader = mt.LoadImageD(DataKey.IMG, PumitReader, image_only=True)
 normalizer = NormalizeIntensityD()
 
 def process(meta: dict, dataset_name: str, device_id: int):

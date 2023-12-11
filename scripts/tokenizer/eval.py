@@ -10,7 +10,7 @@ from torchvision.utils import save_image
 from tqdm import tqdm
 
 from luolib.models import load_ckpt
-from pumit import pumitDataModule
+from pumit import PUMITDataModule
 from pumit.sac import SpatialTensor
 from pumit.tokenizer import VQTokenizer
 from pumit.transforms import rgb_to_gray
@@ -21,7 +21,7 @@ def main():
     torch.set_float32_matmul_precision('high')
     parser = ArgumentParser()
     parser.add_subclass_arguments(VQTokenizer, 'model')
-    parser.add_class_arguments(pumitDataModule, 'data')
+    parser.add_class_arguments(PUMITDataModule, 'data')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--state_dict_key', type=str, default='model')
     parser.add_argument('--plot', action='store_true')
@@ -29,7 +29,7 @@ def main():
     args = parser.instantiate_classes(args)
     model: VQTokenizer = args.model.cuda().eval()
     load_ckpt(model, args.ckpt_path)
-    dm: pumitDataModule = args.data
+    dm: PUMITDataModule = args.data
     torch.set_grad_enabled(False)
     cnt = torch.zeros(1024, device='cuda')
     entropy = []

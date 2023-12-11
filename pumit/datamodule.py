@@ -16,7 +16,7 @@ from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader, MetaTensor
 from monai import transforms as mt
 
-from pumit.reader import pumitReader
+from pumit.reader import PumitReader
 from pumit.transforms import (
     AdaptivePadD, AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD,
     ensure_rgb,
@@ -137,7 +137,7 @@ class pumitDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
-class pumitDataset(TorchDataset):
+class PumitDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
         self.transform = transform
@@ -148,7 +148,7 @@ class pumitDataset(TorchDataset):
         data['_trans'] = trans
         return mt.apply_transform(self.transform, data)
 
-class pumitDataModule(LightningDataModule):
+class PUMITDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_weights: dict[str, float],
@@ -209,7 +209,7 @@ class pumitDataModule(LightningDataModule):
             [
                 lt.RandomizableLoadImageD(
                     DataKey.IMG,
-                    pumitReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
+                    PumitReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
                     image_only=True,
                 ),
                 mt.ToDeviceD(DataKey.IMG, self.device),
@@ -243,7 +243,7 @@ class pumitDataModule(LightningDataModule):
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
         return DataLoader(
-            pumitDataset(data, self.train_transform()),
+            PumitDataset(data, self.train_transform()),
             conf.num_workers,
             batch_sampler=pumitDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
@@ -257,7 +257,7 @@ class pumitDataModule(LightningDataModule):
 
     def val_transform(self) -> Callable:
         return mt.Compose([
-            mt.LoadImageD(DataKey.IMG, pumitReader, image_only=True),
+            mt.LoadImageD(DataKey.IMG, PumitReader, image_only=True),
             UpdateSpacingD(),
             mt.CropForegroundD(DataKey.IMG, DataKey.IMG),
             AdaptivePadD(),
