@@ -7,13 +7,12 @@ dependencies:
 - python=3.11
 - omegaconf
 - numpy
-- pytorch::pytorch
+- pytorch::pytorch=2.1.1
 - llvm-openmp<16  # https://github.com/pytorch/pytorch/issues/99625
 - pytorch::pytorch-cuda=11.8
 - pytorch::torchvision
 - einops
 - lightning
-- pydantic<2  # https://github.com/Lightning-AI/lightning/issues/18027
 - torchmetrics
 - transformers
 - timm
@@ -26,7 +25,6 @@ dependencies:
 - itk
 - pydicom
 - gdcm
-- expect  # for unbuffer
 
 - pip
 - pip:

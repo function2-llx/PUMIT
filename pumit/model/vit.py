@@ -95,7 +95,7 @@ class Attention(nn.Module):
         q = self.apply_rope(q)
         k = self.apply_rope(k)
         x = einops.rearrange(
-            # if using amp, v.dtype here will the autocast dtype
+            # if using amp, v.dtype here will be the autocast dtype
             xops.memory_efficient_attention(q.type_as(v), k.type_as(v), v),
             'n l nh d -> n l (nh d)',
         )
