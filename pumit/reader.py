@@ -8,7 +8,7 @@ from monai.config import PathLike
 from monai.data import ImageReader
 from monai.utils import MetaKeys, ensure_tuple
 
-class PUMTReader(mt.Randomizable, ImageReader):
+class pumitReader(mt.Randomizable, ImageReader):
     def __init__(self, max_slices: int | None = None):
         self.max_slices = max_slices
 

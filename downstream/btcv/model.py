@@ -18,8 +18,8 @@ from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
 from monai.utils import BlendMode, ImageMetaKey, MetaKeys, MetricReduction
 
-from pumt.model import SimpleViTAdapter
-from pumt.sac import resample
+from pumit.model import SimpleViTAdapter
+from pumit.sac import resample
 
 class BTCVModel(LightningModule):
     loss_weight: torch.Tensor

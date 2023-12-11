@@ -1,4 +1,4 @@
-class_path: pumt.tokenizer.VQVAEModel
+class_path: pumit.tokenizer.VQVAEModel
 init_args:
   z_channels: 256
   embedding_dim: 256
@@ -9,7 +9,7 @@ init_args:
     num_res_blocks: 2
     additional_interpolation: true
   quantize:
-    class_path: pumt.tokenizer.VectorQuantizer
+    class_path: pumit.tokenizer.VectorQuantizer
     init_args:
       num_embeddings: 8192
       embedding_dim: 256

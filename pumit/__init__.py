@@ -1,1 +1,1 @@
-from .datamodule import PUMTDataModule
+from .datamodule import pumitDataModule

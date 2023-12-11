@@ -1,7 +1,7 @@
-class_path: pumt.tokenizer.SimpleVQTokenizer
+class_path: pumit.tokenizer.SimpleVQTokenizer
 init_args:
   quantize:
-    class_path: pumt.tokenizer.VectorQuantizer
+    class_path: pumit.tokenizer.VectorQuantizer
     init_args:
       num_embeddings: 1024
       embedding_dim: 512

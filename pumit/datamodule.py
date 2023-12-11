@@ -16,8 +16,8 @@ from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader, MetaTensor
 from monai import transforms as mt
 
-from pumt.reader import PUMTReader
-from pumt.transforms import (
+from pumit.reader import pumitReader
+from pumit.transforms import (
     AdaptivePadD, AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD,
     ensure_rgb,
 )
@@ -55,7 +55,7 @@ class TransformConf:
     stride: int = 16
     isotropic_th: float = 3.,
 
-class PUMTDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
+class pumitDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
     def __init__(
         self,
         data: list[dict],
@@ -137,7 +137,7 @@ class PUMTDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
-class PUMTDataset(TorchDataset):
+class pumitDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
         self.transform = transform
@@ -148,7 +148,7 @@ class PUMTDataset(TorchDataset):
         data['_trans'] = trans
         return mt.apply_transform(self.transform, data)
 
-class PUMTDataModule(LightningDataModule):
+class pumitDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_weights: dict[str, float],
@@ -209,7 +209,7 @@ class PUMTDataModule(LightningDataModule):
             [
                 lt.RandomizableLoadImageD(
                     DataKey.IMG,
-                    PUMTReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
+                    pumitReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
                     image_only=True,
                 ),
                 mt.ToDeviceD(DataKey.IMG, self.device),
@@ -243,9 +243,9 @@ class PUMTDataModule(LightningDataModule):
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
         return DataLoader(
-            PUMTDataset(data, self.train_transform()),
+            pumitDataset(data, self.train_transform()),
             conf.num_workers,
-            batch_sampler=PUMTDistributedBatchSampler(
+            batch_sampler=pumitDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
                 self.world_size, self.global_rank, self.R, conf.train_batch_size, weight,
             ),
@@ -257,7 +257,7 @@ class PUMTDataModule(LightningDataModule):
 
     def val_transform(self) -> Callable:
         return mt.Compose([
-            mt.LoadImageD(DataKey.IMG, PUMTReader, image_only=True),
+            mt.LoadImageD(DataKey.IMG, pumitReader, image_only=True),
             UpdateSpacingD(),
             mt.CropForegroundD(DataKey.IMG, DataKey.IMG),
             AdaptivePadD(),

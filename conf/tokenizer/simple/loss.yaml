@@ -1,7 +1,7 @@
 quant_weight: 1.
 entropy_weight: 0.2
 discriminator:
-  class_path: pumt.tokenizer.discriminator.SimplePatchDiscriminator
+  class_path: pumit.tokenizer.discriminator.SimplePatchDiscriminator
   init_args:
     in_channels: 3
     layer_channels: [128, 256, 512]

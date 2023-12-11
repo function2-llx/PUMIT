@@ -10,7 +10,7 @@ def main():
     args = parser.parse_args()
     r = []
     w = []
-    for dataset_dir in Path('datasets-PUMT').iterdir():
+    for dataset_dir in Path('datasets-pumit').iterdir():
         dataset_name = dataset_dir.name
         meta = pd.read_csv(dataset_dir / 'images-meta.csv', index_col='key')
         incomplete = meta[pd.isna(meta['modality'])]

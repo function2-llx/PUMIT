@@ -5,7 +5,7 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from pumt import sac
+from pumit import sac
 from .discriminator import PatchDiscriminatorBase
 from .lpips import LPIPS
 from .quantize import VectorQuantizerOutput

@@ -8,8 +8,8 @@ from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
-from pumt import sac
-from pumt.tokenizer import VQTokenizer
+from pumit import sac
+from pumit.tokenizer import VQTokenizer
 
 src = Path('test-images/T0005.jpg')
 

@@ -8,9 +8,9 @@ from torchvision.utils import save_image
 from luolib.models import load_ckpt
 from monai import transforms as mt
 from monai.data import MetaTensor
-from pumt import sac
-from pumt.tokenizer import VQTokenizer, VQVAEModel
-from pumt.transforms import ensure_rgb, rgb_to_gray
+from pumit import sac
+from pumit.tokenizer import VQTokenizer, VQVAEModel
+from pumit.transforms import ensure_rgb, rgb_to_gray
 
 src = Path('test-images/amos_0065.nii.gz')
 

@@ -12,7 +12,7 @@ from torch import nn
 from luolib.models import load_ckpt
 from luolib.types import tuple3_t
 
-from pumt import sac
+from pumit import sac
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 
 class VQTokenizer(ABC, nn.Module):

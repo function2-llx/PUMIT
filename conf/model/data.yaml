@@ -1,4 +1,4 @@
-class_path: pumt.PUMTDataModule
+class_path: pumit.pumitDataModule
 init_args:
   dataset_weights:
     IDRiD: 0.5

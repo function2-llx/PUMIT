@@ -5,7 +5,7 @@ from torch import nn
 from luolib.models.layers import LayerNormNd
 from luolib.types import call_partial, partial_t, tuple3_t
 
-from pumt import sac
+from pumit import sac
 from .base import VQTokenizer
 
 class SimpleVQTokenizer(VQTokenizer):

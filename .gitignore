@@ -154,7 +154,7 @@ cython_debug/
 
 .idea/
 datasets
-datasets-PUMT*
+datasets-pumit*
 .run
 .vscode/
 pre-trained
@@ -163,7 +163,7 @@ test-images/
 pyrightconfig.json
 output
 scripts/_local
-PUMT-normalized
+pumit-normalized
 processed-data
 tokenizer-eval*
 nnUNet-data

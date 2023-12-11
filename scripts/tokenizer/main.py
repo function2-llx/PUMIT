@@ -15,10 +15,10 @@ from tqdm import tqdm
 from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
 
-from pumt import sac
-from pumt.datamodule import PUMTDataModule
-from pumt.optim import build_optimizer, build_lr_scheduler
-from pumt.tokenizer import VQGANLoss, VQTokenizer
+from pumit import sac
+from pumit.datamodule import pumitDataModule
+from pumit.optim import build_optimizer, build_lr_scheduler
+from pumit.tokenizer import VQGANLoss, VQTokenizer
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -66,7 +66,7 @@ def get_parser():
     parser.add_class_arguments(VQGANLoss, 'loss')
     parser.add_argument('--optimizer_d', type=dict)
     parser.add_argument('--lr_scheduler_d', type=LRSchedulerConfig)
-    parser.add_class_arguments(PUMTDataModule, 'data')
+    parser.add_class_arguments(pumitDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
     parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
     parser.link_arguments('training.seed', 'data.seed')
@@ -124,7 +124,7 @@ def main():
     args = parser.instantiate_classes(raw_args)
     training_args: TrainingArguments = args.training
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
-    logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='PUMT')
+    logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='pumit')
     fabric = Fabric(precision='16-mixed', loggers=logger)
     fabric.seed_everything(training_args.seed)
     fabric.launch()
@@ -186,7 +186,7 @@ def main():
     model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
-    datamodule: PUMTDataModule = args.data
+    datamodule: pumitDataModule = args.data
     datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
         datamodule.train_dataloader(optimized_steps),

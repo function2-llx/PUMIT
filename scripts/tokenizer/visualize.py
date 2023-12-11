@@ -8,8 +8,8 @@ from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
 
-from pumt.sac import SpatialTensor
-from pumt.tokenizer import VQTokenizer
+from pumit.sac import SpatialTensor
+from pumit.tokenizer import VQTokenizer
 
 def main():
     torch.set_float32_matmul_precision('high')

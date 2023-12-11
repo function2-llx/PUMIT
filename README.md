@@ -1,4 +1,4 @@
-# PUMT
+# pumit
 
 ## Create Environment
 
@@ -43,7 +43,7 @@ scripts/model/mim-b.zsh --data.dl_conf.train_batch_size 14 --data.dl_conf.num_wo
 
 ## Run Downstream Tasks
 
-Assume that the pre-trained checkpoint is placed at `./pre-trained/pumt.ckpt`.
+Assume that the pre-trained checkpoint is placed at `./pre-trained/pumit.ckpt`.
 
 ### Classification
 

@@ -12,7 +12,7 @@ from torch.nn import functional as nnf
 from luolib.types import param3_t, tuple3_t
 from monai.utils import InterpolateMode, ensure_tuple_rep
 
-from pumt.transforms import RGB_TO_GRAY_WEIGHT
+from pumit.transforms import RGB_TO_GRAY_WEIGHT
 
 class SpatialTensor(torch.Tensor):
     # gradient checkpointing will not work for this class

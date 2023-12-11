@@ -7,7 +7,7 @@ def main():
     parser = ArgumentParser()
     parser.add_argument('--move', action='store_true')
     args = parser.parse_args()
-    for dataset_dir in Path('datasets-PUMT').iterdir():
+    for dataset_dir in Path('datasets-pumit').iterdir():
         dataset_name = dataset_dir.name
         meta = pd.read_csv(dataset_dir / 'images-meta.csv', index_col='key')
         incomplete = meta[pd.isna(meta['modality'])]
