@@ -8,9 +8,8 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from luolib.models import load_ckpt
-from luolib.types import tuple3_t
-from luolib.models.blocks import sac
+from luolib.models import spadop
+from luolib.models.utils import load_ckpt
 
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 
@@ -22,28 +21,27 @@ class VQVisualTokenizer(ABC, nn.Module):
         self.quantize = quantize
 
     @property
-    @abstractmethod
-    def stride(self) -> tuple3_t[int]:
-        # watch out: https://github.com/pytorch/pytorch/issues/49726
-        pass
-
-    @property
     def codebook_size(self):
         return self.quantize.num_embeddings
 
     @abstractmethod
-    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
         pass
 
     @abstractmethod
-    def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
+    def decode(self, z_q: spadop.SpatialTensor) -> spadop.SpatialTensor:
         pass
 
-    def forward(self, x: sac.SpatialTensor, fabric: Fabric | None = None) -> tuple[sac.SpatialTensor, VectorQuantizerOutput]:
+    def autoencode(self, x: spadop.SpatialTensor, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, VectorQuantizerOutput]:
         z = self.encode(x)
         vq_out: VectorQuantizerOutput = self.quantize(z, fabric)
         x_rec = self.decode(vq_out.z_q)
         return x_rec, vq_out
+
+    def forward(self, x: spadop.SpatialTensor) -> VectorQuantizerOutput:
+        z = self.encode(x)
+        vq_out: VectorQuantizerOutput = self.quantize(z)
+        return vq_out
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if self.is_pretrained:
@@ -51,10 +49,9 @@ class VQVisualTokenizer(ABC, nn.Module):
             state_dict.update(self.state_dict(prefix=prefix))
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def tokenize(self, x: sac.SpatialTensor) -> VectorQuantizerOutput:
-        z = self.encode(x)
-        vq_out: VectorQuantizerOutput = self.quantize(z)
-        return vq_out
+    def tokenize(self, x: spadop.SpatialTensor) -> VectorQuantizerOutput:
+        # deprecated
+        return self(x)
 
     def get_ref_param(self) -> nn.Parameter | None:
         return None

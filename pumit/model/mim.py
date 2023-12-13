@@ -9,13 +9,13 @@ from torch.nn import functional as nnf
 from torch.utils import checkpoint
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
-from luolib.types import LRSchedulerConfig, NoWeightDecayParameter
+from luolib.models import spadop
+from luolib.models.utils import forward_maybe_grad_ckpt, load_ckpt
+from luolib.models.param import NoWeightDecayParameter
 from luolib.utils.grad import grad_norm
-from luolib.utils.lightning import LightningModule
+from luolib.lightning import LightningModule
 from monai.config import PathLike
 
-from luolib.models.blocks import sac
 from pumit.optim import build_lr_scheduler, build_optimizer
 from pumit.tokenizer import VQVisualTokenizer
 from .vit import ViT
@@ -82,7 +82,7 @@ class ViTForMIM(ViT, LightningModule):
         super().train(mode)
         self.tokenizer.train(not self.tokenizer_eval)
 
-    def input_norm(self, x: sac.SpatialTensor):
+    def input_norm(self, x: spadop.SpatialTensor):
         return (x - self.input_norm_mean) / self.input_norm_std
 
     def state_dict(self, *args, **kwargs):
@@ -91,7 +91,7 @@ class ViTForMIM(ViT, LightningModule):
             if not k.startswith('tokenizer.')
         }
 
-    def forward(self, x: sac.SpatialTensor, visible_idx: torch.Tensor | None = None):
+    def forward(self, x: spadop.SpatialTensor, visible_idx: torch.Tensor | None = None):
         if visible_idx is None:
             return super().forward(x)
         x, spatial_shape = self.prepare_seq_input(x)
@@ -110,10 +110,7 @@ class ViTForMIM(ViT, LightningModule):
         ).scatter_(dim=1, index=visible_idx, src=x.gather(dim=1, index=visible_idx))
         for i, block in enumerate(self.blocks):
             x_layer = x if i in self.mask_layer_ids else x.gather(dim=1, index=visible_idx)
-            if self.training and self.grad_ckpt:
-                x_layer = checkpoint.checkpoint(block, x_layer)
-            else:
-                x_layer = block(x_layer)
+            x_layer = forward_maybe_grad_ckpt(block, self.training and self.grad_ckpt, x_layer)
             if i in self.mask_layer_ids:
                 x = x_layer
             else:
@@ -122,7 +119,7 @@ class ViTForMIM(ViT, LightningModule):
         return self.norm(x)
 
     def training_step(self, batch: tuple[torch.Tensor, int, list[PathLike]], batch_idx: int, *args, **kwargs):
-        x = sac.SpatialTensor(*batch[:2])
+        x = spadop.SpatialTensor(*batch[:2])
         tokenizer_input = 2 * x - 1
         quant_out = self.tokenizer.tokenize(tokenizer_input)
         token_logits = einops.rearrange(quant_out.logits.as_tensor(), 'n ... ne -> n (...) ne')
@@ -158,7 +155,7 @@ class ViTForMIM(ViT, LightningModule):
                 ),
                 'n (d h w) c -> n c d h w', d=d, h=h, w=w,
             )
-            mim_z_q = sac.SpatialTensor(mim_z_q, quant_out.z_q.aniso_d, quant_out.z_q.num_downsamples)
+            mim_z_q = spadop.SpatialTensor(mim_z_q, quant_out.z_q.aniso_d, quant_out.z_q.num_downsamples)
             mim_x_rec = (self.tokenizer.decode(mim_z_q) + 1) / 2
             x_rec = (self.tokenizer.decode(quant_out.z_q[0:1]) + 1) / 2
             (plot_dir / 'path.txt').write_text(str(batch[-1][0]))

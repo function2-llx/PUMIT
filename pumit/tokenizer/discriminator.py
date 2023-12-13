@@ -2,10 +2,21 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from luolib.models.blocks import sac
+from luolib.models import spadop
+
+__all__ = [
+    'PatchDiscriminatorBase',
+    'PatchDiscriminator',
+    'SimplePatchDiscriminator',
+    'SwinPatchDiscriminator',
+]
 
 class PatchDiscriminatorBase(nn.Module):
-    pass
+    def forward(self, x: spadop.SpatialTensor):
+        """
+        Returns:
+            patch wise logit of (batch_size, 1, *spatial_shape / patch_size)
+        """
 
 class PatchDiscriminator(PatchDiscriminatorBase):
     def __init__(self, in_channels: int, num_downsample_layers: int, base_channels: int):
@@ -16,44 +27,73 @@ class PatchDiscriminator(PatchDiscriminatorBase):
         ]
         self.main = nn.Sequential()
         self.main.extend([
-            sac.InflatableInputConv3d(in_channels, layer_channels[0], (3, 4, 4), stride=2),
+            spadop.InputConv3D(in_channels, layer_channels[0], (3, 4, 4), stride=2),
             nn.LeakyReLU(0.2, inplace=True),
         ])
         for i in range(1, num_downsample_layers + 1):
             stride = 2 if i < num_downsample_layers else 1
             self.main.extend([
-                sac.InflatableConv3d(
+                spadop.Conv3d(
                     layer_channels[i - 1], layer_channels[i], (3, 4, 4), stride, padding=1, bias=False,
                 ),
                 nn.InstanceNorm3d(layer_channels[i], affine=True),
                 nn.LeakyReLU(0.2, inplace=True)
             ])
         self.main.append(
-            sac.InflatableConv3d(layer_channels[-1], 1, (3, 4, 4), stride=1, padding=1),
+            spadop.Conv3d(layer_channels[-1], 1, (3, 4, 4), stride=1, padding=1),
         )
         # init_common(self)
 
-    def forward(self, x: sac.SpatialTensor):
+    def forward(self, x: spadop.SpatialTensor):
         return self.main(x)
 
 class SimplePatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
     def __init__(self, in_channels: int, layer_channels: Sequence[int], num_post_convs: int = 1):
         super().__init__()
         self.extend([
-            sac.InflatableInputConv3d(in_channels, layer_channels[0], 3, stride=2, padding=1),
+            spadop.InputConv3D(in_channels, layer_channels[0], 3, stride=2, padding=1),
             nn.GroupNorm(16, layer_channels[0]),
             nn.LeakyReLU(inplace=True),
         ])
         for i in range(1, len(layer_channels)):
             self.extend([
-                sac.InflatableInputConv3d(layer_channels[i - 1], layer_channels[i], 3, stride=2, padding=1),
+                spadop.InputConv3D(layer_channels[i - 1], layer_channels[i], 3, stride=2, padding=1),
                 nn.GroupNorm(16, layer_channels[i]),
                 nn.LeakyReLU(inplace=True),
             ])
         for _ in range(num_post_convs):
             self.extend([
-                sac.InflatableInputConv3d(layer_channels[-1], layer_channels[-1], 3, padding=1),
+                spadop.InputConv3D(layer_channels[-1], layer_channels[-1], 3, padding=1),
                 nn.GroupNorm(16, layer_channels[-1]),
                 nn.LeakyReLU(inplace=True),
             ])
-        self.append(sac.InflatableInputConv3d(layer_channels[-1], 1, 3, padding=1))
+        self.append(spadop.InputConv3D(layer_channels[-1], 1, 3, padding=1))
+
+class SwinPatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
+    def __init__(
+        self,
+        in_channels: int,
+        layer_channels: Sequence[int],
+        layer_depths: Sequence[int],
+        layer_num_heads: Sequence[int],
+        grad_ckpt: bool = False,
+    ):
+        super().__init__()
+
+        num_layers = len(layer_channels)
+        assert num_layers == 3
+        self.append(
+            spadop.InputConv3D(in_channels, layer_channels[0], 4, 4),
+        )
+        for i in range(num_layers):
+            self.append(
+                spadop.SwinLayer(
+                    layer_channels[i], layer_depths[i], layer_num_heads[i], 4,
+                    last_norm=True, grad_ckpt=grad_ckpt,
+                )
+            )
+            if i + 1 < len(layer_channels):
+                self.append(
+                    spadop.Conv3d(layer_channels[i], layer_channels[i + 1], 2, 2),
+                )
+        self.append(spadop.InputConv3D(layer_channels[-1], 1, 1))

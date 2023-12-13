@@ -2,87 +2,81 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from luolib.models.layers import LayerNormNd
-from luolib.types import call_partial, partial_t, tuple3_t
+from luolib.models import spadop
+from luolib.utils import ChannelFirst, ChannelLast
 
-from luolib.models.blocks import sac
 from .base import VQVisualTokenizer
 
-class SimpleSwinVQVT(VQVisualTokenizer):
+__all__ = [
+    'SwinVQVT',
+]
+
+class SwinVQVT(VQVisualTokenizer):
     def __init__(
         self,
         in_channels: int,
-        # start_stride: int,
-        # downsample_layer_channels: Sequence[int],
-        # upsample_layer_channels: Sequence[int],
-        # encoder_act: partial_t[nn.Module] = nn.GELU,
+        encoder_layer_channels: Sequence[int],
+        encoder_layer_depths: Sequence[int],
+        encoder_layer_num_heads: Sequence[int],
+        encoder_output_channels: int,
+        decoder_layer_channels: Sequence[int],
+        decoder_layer_depths: Sequence[int],
+        decoder_layer_num_heads: Sequence[int],
+        grad_ckpt: bool = False,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        encoder_num_layers = len(encoder_layer_channels)
+        decoder_num_layers = len(encoder_layer_channels)
+        assert encoder_num_layers == decoder_num_layers == 3
         self.encoder = nn.Sequential(
-            sac.InflatableInputConv3d()
-
+            spadop.InputConv3D(in_channels, encoder_layer_channels[0], 4, 4),
         )
-
-        assert start_stride > 1
-        self.encoder = nn.Sequential()
-        self._stride = 1
-        for i in range(len(downsample_layer_channels)):
-            stride = start_stride if i == 0 else 2
-            self._stride *= stride
-            self.encoder.extend([
-                sac.InflatableConv3d(
-                    in_channels if i == 0 else downsample_layer_channels[i - 1],
-                    downsample_layer_channels[i],
-                    kernel_size=stride,
-                    stride=stride,
-                ),
-                LayerNormNd(downsample_layer_channels[i]),
-                call_partial(encoder_act),
-            ])
+        for i in range(encoder_num_layers):
+            self.encoder.append(
+                spadop.SwinLayer(
+                    encoder_layer_channels[i], encoder_layer_depths[i], encoder_layer_num_heads[i], 4,
+                    last_norm=True, grad_ckpt=grad_ckpt,
+                )
+            )
+            if i + 1 < len(encoder_layer_channels):
+                self.encoder.append(
+                    spadop.Conv3d(encoder_layer_channels[i], encoder_layer_channels[i + 1], 2, 2),
+                )
         self.encoder.extend([
-            sac.InflatableConv3d(
-                downsample_layer_channels[-1],
-                downsample_layer_channels[-1],
-                kernel_size=3,
-                padding=1,
-            ),
-            nn.GroupNorm(8, downsample_layer_channels[-1]),
-            nn.LeakyReLU(inplace=True),
-            sac.InflatableConv3d(
-                downsample_layer_channels[-1],
-                self.quantize.proj.in_features,
-                kernel_size=3,
-                padding=1,
-            ),
-            nn.GroupNorm(8, self.quantize.proj.in_features),
-            nn.LeakyReLU(inplace=True),
+            ChannelLast(),
+            nn.Linear(encoder_layer_channels[-1], encoder_output_channels),
+            nn.LayerNorm(encoder_output_channels),
+            nn.GELU(),
         ])
 
-        output_stride = start_stride << len(downsample_layer_channels) - 1 >> len(upsample_layer_channels) - 1
         self.decoder = nn.Sequential(
-            sac.InflatableConv3d(self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(8, upsample_layer_channels[-1]),
-            nn.LeakyReLU(inplace=True),
-            sac.InflatableConv3d(
-                self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1
-            ),
-            nn.GroupNorm(8, upsample_layer_channels[-1]),
-            nn.LeakyReLU(inplace=True),
-            *[
-                sac.AdaptiveTransposedConvUpsample(upsample_layer_channels[i + 1], upsample_layer_channels[i], 2)
-                for i in reversed(range(len(upsample_layer_channels) - 1))
-            ],
-            sac.InflatableTransposedConv3d(upsample_layer_channels[0], in_channels, kernel_size=output_stride, stride=output_stride),
+            nn.Linear(self.quantize.embedding_dim, decoder_layer_channels[-1]),
+            nn.LayerNorm(encoder_layer_channels[-1]),
+            nn.GELU(),
+            ChannelFirst(),
+        )
+        for i in reversed(range(decoder_num_layers)):
+            self.decoder.append(
+                spadop.SwinLayer(
+                    decoder_layer_channels[i], decoder_layer_depths[i], decoder_layer_num_heads[i], 4,
+                    last_norm=True, grad_ckpt=grad_ckpt,
+                )
+            )
+            if i > 0:
+                self.decoder.append(
+                    spadop.TransposedConv3d(decoder_layer_channels[i], decoder_layer_channels[i - 1], 2, 2),
+                )
+        self.decoder.append(
+            # there can be something like OutputTransposedConv3d, but unnecessary
+            spadop.TransposedConv3d(
+                decoder_layer_channels[0], in_channels, 4, 4,
+            )
         )
 
-    @property
-    def stride(self) -> tuple3_t[int]:
-        return (self._stride, ) * 3
-
-    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
         return self.encoder(x)
 
-    def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
+    def decode(self, z_q: spadop.SpatialTensor) -> spadop.SpatialTensor:
         return self.decoder(z_q)

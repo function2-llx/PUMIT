@@ -7,15 +7,15 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 
+from luolib.models import spadop
 from luolib.types import tuple3_t
 
-from luolib.models.blocks import sac
 from .base import VQVisualTokenizer
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
 
-def act_layer(x: sac.SpatialTensor):
+def act_layer(x: spadop.SpatialTensor):
     # swish
     return x * torch.sigmoid(x)
 
@@ -35,26 +35,26 @@ class ResnetBlock(nn.Module):
         self.use_conv_shortcut = conv_shortcut
 
         self.norm1 = get_norm_layer(in_channels)
-        self.conv1 = sac.InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv1 = spadop.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = get_norm_layer(out_channels)
         self.dropout = nn.Dropout(dropout)
-        self.conv2 = sac.InflatableConv3d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = spadop.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
         if in_channels != out_channels:
             if self.use_conv_shortcut:
-                self.conv_shortcut = sac.InflatableConv3d(in_channels, out_channels, kernel_size=3, padding=1)
+                self.conv_shortcut = spadop.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
             else:
-                self.nin_shortcut = sac.InflatableConv3d(in_channels, out_channels, kernel_size=1)
+                self.nin_shortcut = spadop.Conv3d(in_channels, out_channels, kernel_size=1)
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if len(state_dict) == 0:
             # thank you,<s> USA </s>residual connection
             for name in ['conv1', 'conv2']:
-                conv: sac.InflatableConv3d = getattr(self, name)
+                conv: spadop.Conv3d = getattr(self, name)
                 state_dict[f'{prefix}{name}.weight'] = torch.zeros_like(conv.weight)
                 state_dict[f'{prefix}{name}.bias'] = torch.zeros_like(conv.bias)
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def forward(self, x: sac.SpatialTensor):
+    def forward(self, x: spadop.SpatialTensor):
         h = x
         h = self.norm1(h)
         h = act_layer(h)
@@ -78,10 +78,10 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
         self.norm = get_norm_layer(in_channels)
-        self.q = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.k = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.v = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
-        self.proj_out = sac.InflatableConv3d(in_channels, in_channels, kernel_size=1)
+        self.q = spadop.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.k = spadop.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.v = spadop.Conv3d(in_channels, in_channels, kernel_size=1)
+        self.proj_out = spadop.Conv3d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor):
         h_ = x
@@ -130,13 +130,13 @@ class EncoderDownLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if downsample:
-            self.downsample = sac.AdaptiveConvDownsample(out_channels, out_channels, (2, 3, 3))
+            self.downsample = spadop.AdaptiveConvDownsample(out_channels, out_channels, (2, 3, 3))
         else:
             self.register_module('downsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: sac.SpatialTensor):
+    def forward(self, x: spadop.SpatialTensor):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -165,8 +165,8 @@ class Encoder(nn.Module):
         super().__init__()
         self.num_layers = len(layer_channels)
         attn_layer_ids = attn_layer_ids or []
-        self.conv_in = sac.InflatableInputConv3d(in_channels, layer_channels[0], kernel_size=3, padding=1)
-        self.additional_interpolation = sac.AdaptiveInterpolationDownsample() if additional_interpolation else nn.Identity()
+        self.conv_in = spadop.InputConv3D(in_channels, layer_channels[0], kernel_size=3, padding=1)
+        self.additional_interpolation = spadop.AdaptiveInterpolationDownsample() if additional_interpolation else nn.Identity()
         # downsampling
         self.down = nn.ModuleList([
             EncoderDownLayer(
@@ -193,9 +193,9 @@ class Encoder(nn.Module):
 
         # end
         self.norm_out = get_norm_layer(last_channels)
-        self.conv_out = sac.InflatableConv3d(last_channels, z_channels, kernel_size=3, padding=1)
+        self.conv_out = spadop.Conv3d(last_channels, z_channels, kernel_size=3, padding=1)
 
-    def forward(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def forward(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
         x = self.conv_in(x)
         x = self.additional_interpolation(x)
         for down in self.down:
@@ -228,13 +228,13 @@ class DecoderUpLayer(nn.Module):
         else:
             self.attn = nn.ModuleList([nn.Identity() for _ in range(num_res_blocks)])
         if upsample:
-            self.upsample = sac.AdaptiveInterpolationUpsampleWithPostConv(out_channels)
+            self.upsample = spadop.AdaptiveInterpolationUpsampleWithPostConv(out_channels)
         else:
             self.register_module('upsample', None)
 
         self.gradient_checkpointing = gradient_checkpointing
 
-    def forward(self, x: sac.SpatialTensor):
+    def forward(self, x: spadop.SpatialTensor):
         for block, attn in zip(self.block, self.attn):
             if self.training and self.gradient_checkpointing:
                 x = checkpoint(cytoolz.compose(attn, block), x)
@@ -266,7 +266,7 @@ class Decoder(nn.Module):
         last_channels = layer_channels[-1]
 
         # z to last feature map channels
-        self.conv_in = sac.InflatableConv3d(z_channels, last_channels, kernel_size=3, padding=1)
+        self.conv_in = spadop.Conv3d(z_channels, last_channels, kernel_size=3, padding=1)
 
         # middle
         self.mid = nn.Sequential(OrderedDict(
@@ -290,12 +290,12 @@ class Decoder(nn.Module):
             )
             for i in range(num_layers)
         ])
-        self.additional_interpolation = sac.AdaptiveInterpolationUpsample() if additional_interpolation else nn.Identity()
+        self.additional_interpolation = spadop.AdaptiveInterpolationUpsample() if additional_interpolation else nn.Identity()
 
         # end
         first_channels = layer_channels[0]
         self.norm_out = get_norm_layer(first_channels)
-        self.conv_out = sac.InflatableOutputConv3d(first_channels, in_channels, kernel_size=3, padding=1)
+        self.conv_out = spadop.OutputConv3D(first_channels, in_channels, kernel_size=3, padding=1)
 
     def forward(self, z: torch.Tensor):
         x = self.conv_in(z)
@@ -314,10 +314,10 @@ class VQVAEModel(VQVisualTokenizer):
         super().__init__(*args, **kwargs)
         self.encoder = Encoder(**ed_kwargs)
         self.decoder = Decoder(**ed_kwargs)
-        self.quant_conv = sac.InflatableConv3d(z_channels, embedding_dim, 1)
-        self.post_quant_conv = sac.InflatableConv3d(embedding_dim, z_channels, 1)
+        self.quant_conv = spadop.Conv3d(z_channels, embedding_dim, 1)
+        self.post_quant_conv = spadop.Conv3d(embedding_dim, z_channels, 1)
 
-    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
         x = self.encoder(x)
         return self.quant_conv(x)
 

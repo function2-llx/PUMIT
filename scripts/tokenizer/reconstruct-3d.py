@@ -5,10 +5,10 @@ import nibabel as nib
 import torch
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
+from luolib.models import spadop
+from luolib.models.utils import load_ckpt
 from monai import transforms as mt
 from monai.data import MetaTensor
-from luolib.models.blocks import sac
 from pumit.tokenizer import VQVisualTokenizer, VQVAEModel
 from pumit.transforms import ensure_rgb, rgb_to_gray
 
@@ -37,7 +37,7 @@ def main():
     meta_tensor: MetaTensor = loader(src)
     affine = meta_tensor.affine
     aniso_d = int(max(1, meta_tensor.pixdim[0] / min(meta_tensor.pixdim[1:]))).bit_length() - 1
-    x = sac.SpatialTensor(meta_tensor.as_tensor(), aniso_d)
+    x = spadop.SpatialTensor(meta_tensor.as_tensor(), aniso_d)
     nib.save(nib.Nifti1Image(x[0].detach().float().cpu().numpy(), affine.numpy()), 'origin.nii.gz')
     print(x.shape, x.num_pending_hw_downsamples)
     model = args.model.cuda().train()

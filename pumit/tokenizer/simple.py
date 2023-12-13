@@ -2,10 +2,10 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from luolib.models.layers import LayerNormNd
 from luolib.types import call_partial, partial_t, tuple3_t
+from luolib.models import spadop
+from luolib.models.layers import LayerNormNd
 
-from luolib.models.blocks import sac
 from .base import VQVisualTokenizer
 
 class SimpleVQVT(VQVisualTokenizer):
@@ -27,7 +27,7 @@ class SimpleVQVT(VQVisualTokenizer):
             stride = start_stride if i == 0 else 2
             self._stride *= stride
             self.encoder.extend([
-                sac.InflatableConv3d(
+                spadop.Conv3d(
                     in_channels if i == 0 else downsample_layer_channels[i - 1],
                     downsample_layer_channels[i],
                     kernel_size=stride,
@@ -37,7 +37,7 @@ class SimpleVQVT(VQVisualTokenizer):
                 call_partial(encoder_act),
             ])
         self.encoder.extend([
-            sac.InflatableConv3d(
+            spadop.Conv3d(
                 downsample_layer_channels[-1],
                 downsample_layer_channels[-1],
                 kernel_size=3,
@@ -45,7 +45,7 @@ class SimpleVQVT(VQVisualTokenizer):
             ),
             nn.GroupNorm(8, downsample_layer_channels[-1]),
             nn.LeakyReLU(inplace=True),
-            sac.InflatableConv3d(
+            spadop.Conv3d(
                 downsample_layer_channels[-1],
                 self.quantize.proj.in_features,
                 kernel_size=3,
@@ -57,27 +57,23 @@ class SimpleVQVT(VQVisualTokenizer):
 
         output_stride = start_stride << len(downsample_layer_channels) - 1 >> len(upsample_layer_channels) - 1
         self.decoder = nn.Sequential(
-            sac.InflatableConv3d(self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1),
+            spadop.Conv3d(self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1),
             nn.GroupNorm(8, upsample_layer_channels[-1]),
             nn.LeakyReLU(inplace=True),
-            sac.InflatableConv3d(
+            spadop.Conv3d(
                 self.quantize.embedding_dim, upsample_layer_channels[-1], kernel_size=3, stride=1, padding=1
             ),
             nn.GroupNorm(8, upsample_layer_channels[-1]),
             nn.LeakyReLU(inplace=True),
             *[
-                sac.AdaptiveTransposedConvUpsample(upsample_layer_channels[i + 1], upsample_layer_channels[i], 2)
+                spadop.AdaptiveTransposedConvUpsample(upsample_layer_channels[i + 1], upsample_layer_channels[i], 2)
                 for i in reversed(range(len(upsample_layer_channels) - 1))
             ],
-            sac.InflatableTransposedConv3d(upsample_layer_channels[0], in_channels, kernel_size=output_stride, stride=output_stride),
+            spadop.TransposedConv3d(upsample_layer_channels[0], in_channels, kernel_size=output_stride, stride=output_stride),
         )
 
-    @property
-    def stride(self) -> tuple3_t[int]:
-        return (self._stride, ) * 3
-
-    def encode(self, x: sac.SpatialTensor) -> sac.SpatialTensor:
+    def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
         return self.encoder(x)
 
-    def decode(self, z_q: sac.SpatialTensor) -> sac.SpatialTensor:
+    def decode(self, z_q: spadop.SpatialTensor) -> spadop.SpatialTensor:
         return self.decoder(z_q)

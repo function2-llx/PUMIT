@@ -12,10 +12,10 @@ from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
 
+from luolib.models import spadop
 from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
 
-from luolib.models.blocks import sac
 from pumit.datamodule import PUMITDataModule
 from pumit.optim import build_optimizer, build_lr_scheduler
 from pumit.tokenizer import VQGANLoss, VQVisualTokenizer
@@ -202,7 +202,7 @@ def main():
         start=optimized_steps,
     ):
         x = 2 * x - 1
-        x = sac.SpatialTensor(x, aniso_d)
+        x = spadop.SpatialTensor(x, aniso_d)
         model.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, vq_out = model.forward(x, fabric)
         loss_module.discriminator.requires_grad_(False)

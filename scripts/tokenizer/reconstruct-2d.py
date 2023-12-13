@@ -7,8 +7,8 @@ import torch
 from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
-from luolib.models import load_ckpt
-from luolib.models.blocks import sac
+from luolib.models import spadop
+from luolib.models.utils import load_ckpt
 from pumit.tokenizer import VQVisualTokenizer
 
 src = Path('test-images/T0005.jpg')
@@ -29,7 +29,7 @@ def main():
     ])
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
-    x = sac.SpatialTensor(x, 5)
+    x = spadop.SpatialTensor(x, 5)
     model: VQVisualTokenizer = args.model.cuda().eval()
     print(model.training)
 

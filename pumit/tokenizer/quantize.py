@@ -7,8 +7,6 @@ import torch
 from torch import nn
 from torch.nn import functional as nnf
 
-from luolib.utils import channel_first, channel_last
-
 @dataclass
 class VectorQuantizerOutput:
     z_q: torch.Tensor
@@ -24,8 +22,8 @@ class VectorQuantizerOutput:
     entropy: torch.Tensor | None = None
     """entropy of original probability distribution"""
 
-# modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
 class VectorQuantizer(nn.Module):
+    # modified from https://github.com/CompVis/taming-transformers/blob/master/taming/modules/vqvae/quantize.py
     def __init__(self, num_embeddings: int, embedding_dim: int):
         super().__init__()
         self.embedding = nn.Embedding(num_embeddings, embedding_dim)
@@ -65,12 +63,15 @@ class VectorQuantizer(nn.Module):
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None) -> VectorQuantizerOutput:
         """
         Args:
+            z: channel-last feature map
             fabric: the Fabric instance used during DDP training
         """
         raise NotImplementedError
 
 class NNVQ(VectorQuantizer):
-    """Nearest Neighbor Vector Quantizer"""
+    """
+    Nearest Neighbor Vector Quantizer, embedding_dim is supposed to = channels of input feature map
+    """
     def __init__(self, num_embeddings: int, embedding_dim: int, beta: float = 0.25):
         """
         Args:
@@ -82,7 +83,6 @@ class NNVQ(VectorQuantizer):
         self.beta = beta
 
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
-        z = channel_last(z).contiguous()
         # distances from z to embeddings, exclude |z|^2
         d = torch.sum(self.embedding.weight ** 2, dim=1) \
             - 2 * einops.einsum(z, self.embedding.weight, '... d, ne d -> ... ne')
@@ -94,7 +94,6 @@ class NNVQ(VectorQuantizer):
         # reshape back to match original input shape
         # https://github.com/pytorch/pytorch/issues/103142
         diversity = sum([i.unique().numel() for i in index]) / np.prod(z_q.shape[:-1])
-        z_q = channel_first(z_q).contiguous()
         return VectorQuantizerOutput(z_q, index, loss, diversity)
 
 def cal_entropy(probs: torch.Tensor, logits: torch.Tensor):
@@ -115,7 +114,7 @@ class ProbabilisticVQ(VectorQuantizer):
     def get_pdr_loss(self, probs: torch.Tensor, fabric: Fabric | None):
         """prior distribution regularization"""
         mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
-        if self.training:
+        if fabric is not None and self.training:
             # don't use all_reduce: https://github.com/Lightning-AI/lightning/issues/18228
             detached = mean_probs.detach()
             mean_probs = fabric.all_gather(detached).mean(dim=0) - detached + mean_probs
@@ -152,7 +151,6 @@ class GumbelVQ(ProbabilisticVQ):
         self.temperature = self.t_min + 0.5 * (self.t_max - self.t_min) * (1 + np.cos(min(global_step / max_steps, 1.) * np.pi))
 
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
-        z = channel_last(z).contiguous()
         logits, probs, entropy = self.project_over_codebook(z)
         loss = self.get_pdr_loss(probs, fabric)
         if self.training:
@@ -160,17 +158,15 @@ class GumbelVQ(ProbabilisticVQ):
         else:
             index_probs = probs
         z_q = self.embed_index(index_probs)
-        # https://github.com/pytorch/pytorch/issues/103142
-        z_q = channel_first(z_q).contiguous()
         return VectorQuantizerOutput(z_q, index_probs, loss, self.cal_diversity(index_probs), logits, entropy)
 
 class SoftVQ(ProbabilisticVQ):
     def __init__(self, num_embeddings: int, embedding_dim: int, in_channels: int | None = None, prune: int | None = 3):
         super().__init__(num_embeddings, embedding_dim, in_channels)
         assert prune is None or prune > 0
+        self.prune = prune
 
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
-        z = channel_last(z).contiguous()
         logits, probs, entropy = self.project_over_codebook(z)
         if self.prune is None:
             index_probs = probs
@@ -182,5 +178,4 @@ class SoftVQ(ProbabilisticVQ):
             index_probs = index_probs + probs - probs.detach()
         loss = self.get_pdr_loss(index_probs, fabric)
         z_q = self.embed_index(index_probs)
-        z_q = channel_first(z_q).contiguous()
         return VectorQuantizerOutput(z_q, index_probs, loss, self.cal_diversity(index_probs), logits, entropy)
