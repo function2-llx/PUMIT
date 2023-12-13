@@ -12,7 +12,7 @@ from tqdm import tqdm
 from luolib.models import load_ckpt
 from pumit import PUMITDataModule
 from pumit.sac import SpatialTensor
-from pumit.tokenizer import VQTokenizer
+from pumit.tokenizer import VQVisualTokenizer
 from pumit.transforms import rgb_to_gray
 
 output_dir = Path('tokenizer-eval')
@@ -20,14 +20,14 @@ output_dir = Path('tokenizer-eval')
 def main():
     torch.set_float32_matmul_precision('high')
     parser = ArgumentParser()
-    parser.add_subclass_arguments(VQTokenizer, 'model')
+    parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_class_arguments(PUMITDataModule, 'data')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--state_dict_key', type=str, default='model')
     parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
     args = parser.instantiate_classes(args)
-    model: VQTokenizer = args.model.cuda().eval()
+    model: VQVisualTokenizer = args.model.cuda().eval()
     load_ckpt(model, args.ckpt_path)
     dm: PUMITDataModule = args.data
     torch.set_grad_enabled(False)

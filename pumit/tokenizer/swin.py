@@ -8,18 +8,23 @@ from luolib.types import call_partial, partial_t, tuple3_t
 from luolib.models.blocks import sac
 from .base import VQVisualTokenizer
 
-class SimpleVQVT(VQVisualTokenizer):
+class SimpleSwinVQVT(VQVisualTokenizer):
     def __init__(
         self,
         in_channels: int,
-        start_stride: int,
-        downsample_layer_channels: Sequence[int],
-        upsample_layer_channels: Sequence[int],
-        encoder_act: partial_t[nn.Module] = nn.GELU,
+        # start_stride: int,
+        # downsample_layer_channels: Sequence[int],
+        # upsample_layer_channels: Sequence[int],
+        # encoder_act: partial_t[nn.Module] = nn.GELU,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.encoder = nn.Sequential(
+            sac.InflatableInputConv3d()
+
+        )
+
         assert start_stride > 1
         self.encoder = nn.Sequential()
         self._stride = 1

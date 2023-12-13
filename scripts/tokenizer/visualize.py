@@ -9,13 +9,13 @@ from torchvision.utils import save_image
 from luolib.models import load_ckpt
 
 from pumit.sac import SpatialTensor
-from pumit.tokenizer import VQTokenizer
+from pumit.tokenizer import VQVisualTokenizer
 
 def main():
     torch.set_float32_matmul_precision('high')
     torch.set_default_device('cuda')
     parser = ArgumentParser()
-    parser.add_subclass_arguments(VQTokenizer, 'model')
+    parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--out_path', type=Path)
     parser.add_argument('--nr', type=int, default=32)
@@ -24,7 +24,7 @@ def main():
     args = parser.parse_args()
     args = parser.instantiate_classes(args)
     print(args)
-    model: VQTokenizer = args.model.eval()
+    model: VQVisualTokenizer = args.model.eval()
     load_ckpt(model, args.ckpt_path, state_dict_key=args.state_dict_key)
     z = einops.rearrange(model.quantize.embedding.weight[:args.nr * args.nc], 'n c -> n c 1 1 1')
     z = SpatialTensor(z, aniso_d=5)

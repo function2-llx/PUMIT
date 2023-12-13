@@ -8,14 +8,14 @@ from torchvision import transforms as tvt
 from torchvision.utils import save_image
 
 from luolib.models import load_ckpt
-from pumit import sac
-from pumit.tokenizer import VQTokenizer
+from luolib.models.blocks import sac
+from pumit.tokenizer import VQVisualTokenizer
 
 src = Path('test-images/T0005.jpg')
 
 def main():
     parser = ArgumentParser()
-    parser.add_subclass_arguments(VQTokenizer, 'model')
+    parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
     parser.add_argument('--out_path', type=Path)
     parser.add_argument('--state_dict_key', type=str, default='model')
@@ -30,7 +30,7 @@ def main():
     x = transform(img).cuda() * 2 - 1
     x = einops.rearrange(x, 'c h w -> 1 c 1 h w')
     x = sac.SpatialTensor(x, 5)
-    model: VQTokenizer = args.model.cuda().eval()
+    model: VQVisualTokenizer = args.model.cuda().eval()
     print(model.training)
 
     load_ckpt(model, args.ckpt_path, state_dict_key=args.state_dict_key)

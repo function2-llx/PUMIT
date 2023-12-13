@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-import einops
 from jsonargparse import class_from_function
 from lightning import Fabric
 import torch
@@ -11,11 +10,11 @@ from torch import nn
 
 from luolib.models import load_ckpt
 from luolib.types import tuple3_t
+from luolib.models.blocks import sac
 
-from pumit import sac
 from .quantize import VectorQuantizer, VectorQuantizerOutput
 
-class VQTokenizer(ABC, nn.Module):
+class VQVisualTokenizer(ABC, nn.Module):
     is_pretrained: bool = False
 
     def __init__(self, quantize: VectorQuantizer, *args, **kwargs):
@@ -61,11 +60,11 @@ class VQTokenizer(ABC, nn.Module):
         return None
 
     @classmethod
-    def from_pretrained(cls, model: VQTokenizer, path: Path) -> VQTokenizer:
+    def from_pretrained(cls, model: VQVisualTokenizer, path: Path) -> VQVisualTokenizer:
         # not annotated as Self here for the recognition of jsonargparse
         load_ckpt(model, path)
         model.is_pretrained = True
         return model
 
 # https://github.com/omni-us/jsonargparse/issues/309
-from_pretrained = class_from_function(VQTokenizer.from_pretrained)
+from_pretrained = class_from_function(VQVisualTokenizer.from_pretrained)

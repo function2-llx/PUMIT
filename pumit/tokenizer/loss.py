@@ -5,7 +5,7 @@ from lightning import Fabric
 import torch
 from torch import nn
 
-from pumit import sac
+from luolib.models.blocks import sac
 from .discriminator import PatchDiscriminatorBase
 from .lpips import LPIPS
 from .quantize import VectorQuantizerOutput

@@ -15,9 +15,9 @@ from luolib.utils.grad import grad_norm
 from luolib.utils.lightning import LightningModule
 from monai.config import PathLike
 
-from pumit import sac
+from luolib.models.blocks import sac
 from pumit.optim import build_lr_scheduler, build_optimizer
-from pumit.tokenizer import VQTokenizer
+from pumit.tokenizer import VQVisualTokenizer
 from .vit import ViT
 
 class ViTForMIM(ViT, LightningModule):
@@ -27,7 +27,7 @@ class ViTForMIM(ViT, LightningModule):
     def __init__(
         self,
         *args,
-        tokenizer: VQTokenizer,
+        tokenizer: VQVisualTokenizer,
         tokenizer_eval: bool = True,
         mask_ratio: float,
         mask_layer_ids: Sequence[int],

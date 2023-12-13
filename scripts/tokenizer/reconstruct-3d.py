@@ -8,8 +8,8 @@ from torchvision.utils import save_image
 from luolib.models import load_ckpt
 from monai import transforms as mt
 from monai.data import MetaTensor
-from pumit import sac
-from pumit.tokenizer import VQTokenizer, VQVAEModel
+from luolib.models.blocks import sac
+from pumit.tokenizer import VQVisualTokenizer, VQVAEModel
 from pumit.transforms import ensure_rgb, rgb_to_gray
 
 src = Path('test-images/amos_0065.nii.gz')
@@ -17,7 +17,7 @@ src = Path('test-images/amos_0065.nii.gz')
 def main():
     torch.set_float32_matmul_precision('high')
     parser = ArgumentParser()
-    parser.add_subclass_arguments(VQTokenizer, 'model')
+    parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
     # parser.add_argument('--out_path', type=Path)
     args = parser.parse_args()

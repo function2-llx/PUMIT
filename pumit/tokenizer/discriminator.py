@@ -2,7 +2,7 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from pumit import sac
+from luolib.models.blocks import sac
 
 class PatchDiscriminatorBase(nn.Module):
     pass

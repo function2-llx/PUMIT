@@ -9,8 +9,8 @@ from torch.utils.checkpoint import checkpoint
 
 from luolib.types import tuple3_t
 
-from pumit import sac
-from .base import VQTokenizer
+from luolib.models.blocks import sac
+from .base import VQVisualTokenizer
 
 def get_norm_layer(in_channels: int, num_groups: int = 32):
     return nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
@@ -309,7 +309,7 @@ class Decoder(nn.Module):
         x = self.conv_out(x)
         return x
 
-class VQVAEModel(VQTokenizer):
+class VQVAEModel(VQVisualTokenizer):
     def __init__(self, z_channels: int, embedding_dim: int, ed_kwargs: dict, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.encoder = Encoder(**ed_kwargs)

@@ -14,9 +14,7 @@ from luolib.models import load_ckpt
 from luolib.types import NoWeightDecayParameter, param3_t, tuple2_t, tuple3_t
 from monai.utils import ensure_tuple_rep
 
-from pumit import sac
-from pumit.sac import resample
-from .rope import SpatialRotaryEmbedding
+from luolib.models.blocks import sac, SpatialRotaryEmbedding
 
 class PatchEmbed(nn.Module):
     def __init__(self, patch_size: param3_t[int] = 16, in_chans: int = 3, embed_dim: int = 768, adaptive: bool = True, flatten: bool = True):
@@ -220,7 +218,7 @@ class ViT(nn.Module):
     def prepare_seq_input(self, x: torch.Tensor):
         x = self.patch_embed(x)
         shape = x.shape[2:]
-        x += resample(self.pos_embed, shape)
+        x += sac.resample(self.pos_embed, shape)
         x = self.pos_drop(x)
         x = torch.cat(
             [
@@ -277,6 +275,6 @@ class ViT(nn.Module):
                     pos_embed, '1 (h w) c -> 1 c d h w',
                     d=self.pos_embed.shape[2], h=h, w=w,
                 )
-            state_dict['pos_embed'] = resample(pos_embed, self.pos_embed.shape[2:])
+            state_dict['pos_embed'] = sac.resample(pos_embed, self.pos_embed.shape[2:])
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)

@@ -46,7 +46,7 @@ class VectorQuantizer(nn.Module):
             # convert 1x1 conv2d weight (from VQGAN with Gumbel softmax) to linear
             if weight.ndim == 4 and weight.shape[2:] == (1, 1):
                 state_dict[proj_weight_key] = weight.squeeze()
-        elif self.mode != 'nearest' and (weight := state_dict.get(f'{prefix}embedding.weight')) is not None:
+        elif isinstance(self, NNVQ) and (weight := state_dict.get(f'{prefix}embedding.weight')) is not None:
             # dot product as logit
             state_dict[proj_weight_key] = weight
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
@@ -67,39 +67,7 @@ class VectorQuantizer(nn.Module):
         Args:
             fabric: the Fabric instance used during DDP training
         """
-        z = channel_last(z).contiguous()
-        if self.mode == 'nearest':
-            # distances from z to embeddings, exclude |z|^2
-            d = torch.sum(self.embedding.weight ** 2, dim=1) \
-                - 2 * einops.einsum(z, self.embedding.weight, '... d, ne d -> ... ne')
-            index = d.argmin(dim=-1)
-            z_q = self.embedding(index)
-            loss = ((z_q.detach() - z) ** 2).mean() + self.beta * ((z_q - z.detach()) ** 2).mean()
-            # preserve gradients
-            z_q = z + (z_q - z).detach()
-            # reshape back to match original input shape
-            diversity = sum([i.unique().numel() for i in index]) / np.prod(z_q.shape[:-1])
-            z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index, loss, diversity)
-        else:
-            logits: torch.Tensor = self.proj(z)
-            probs = logits.softmax(dim=-1)
-            mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
-            if self.training:
-                # don't use all_reduce: https://github.com/Lightning-AI/lightning/issues/18228
-                detached = mean_probs.detach()
-                mean_probs = fabric.all_gather(detached).mean(dim=0) - detached + mean_probs
-            loss = (mean_probs * mean_probs.log()).sum()
-            entropy = -einops.einsum(probs, logits.log_softmax(dim=-1), '... ne, ... ne -> ...').mean()
-            if self.mode == 'gumbel' and self.training:
-                index_probs = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
-            else:
-                index_probs = probs
-            z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')
-            # https://github.com/pytorch/pytorch/issues/103142
-            diversity = sum([i.unique().numel() for i in probs.argmax(dim=-1)]) / np.prod(z_q.shape[:-1])
-            z_q = channel_first(z_q).contiguous()
-            return VectorQuantizerOutput(z_q, index_probs, loss, diversity, logits, entropy)
+        raise NotImplementedError
 
 class NNVQ(VectorQuantizer):
     """Nearest Neighbor Vector Quantizer"""
@@ -113,7 +81,7 @@ class NNVQ(VectorQuantizer):
         nn.init.uniform_(self.embedding.weight, -1.0 / num_embeddings, 1.0 / num_embeddings)
         self.beta = beta
 
-    def forward(self, z: torch.Tensor):
+    def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
         z = channel_last(z).contiguous()
         # distances from z to embeddings, exclude |z|^2
         d = torch.sum(self.embedding.weight ** 2, dim=1) \
@@ -124,6 +92,7 @@ class NNVQ(VectorQuantizer):
         # preserve gradients
         z_q = z + (z_q - z).detach()
         # reshape back to match original input shape
+        # https://github.com/pytorch/pytorch/issues/103142
         diversity = sum([i.unique().numel() for i in index]) / np.prod(z_q.shape[:-1])
         z_q = channel_first(z_q).contiguous()
         return VectorQuantizerOutput(z_q, index, loss, diversity)
@@ -208,11 +177,10 @@ class SoftVQ(ProbabilisticVQ):
         else:
             with torch.no_grad():
                 top_logits, top_indices = torch.topk(logits, self.prune, dim=-1)
-            index_probs = torch.zeros_like(logits)
-            index_probs.scatter_(-1, top_indices, top_logits.softmax(dim=-1))
+                index_probs = torch.zeros_like(logits)
+                index_probs.scatter_(-1, top_indices, top_logits.softmax(dim=-1))
             index_probs = index_probs + probs - probs.detach()
         loss = self.get_pdr_loss(index_probs, fabric)
         z_q = self.embed_index(index_probs)
-        # https://github.com/pytorch/pytorch/issues/103142
         z_q = channel_first(z_q).contiguous()
         return VectorQuantizerOutput(z_q, index_probs, loss, self.cal_diversity(index_probs), logits, entropy)

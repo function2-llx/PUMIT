@@ -15,10 +15,10 @@ from tqdm import tqdm
 from luolib.models.utils import load_ckpt
 from luolib.types import LRSchedulerConfig
 
-from pumit import sac
+from luolib.models.blocks import sac
 from pumit.datamodule import PUMITDataModule
 from pumit.optim import build_optimizer, build_lr_scheduler
-from pumit.tokenizer import VQGANLoss, VQTokenizer
+from pumit.tokenizer import VQGANLoss, VQVisualTokenizer
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -60,7 +60,7 @@ class TrainingArguments:
 def get_parser():
     parser = ArgumentParser()
     parser.add_argument('-c', '--config', action=ActionConfigFile)
-    parser.add_subclass_arguments(VQTokenizer, 'model')
+    parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--optimizer_g', type=dict)
     parser.add_argument('--lr_scheduler_g', type=LRSchedulerConfig)
     parser.add_class_arguments(VQGANLoss, 'loss')
@@ -139,7 +139,7 @@ def main():
 
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = training_args.benchmark
-    model: VQTokenizer = args.model
+    model: VQVisualTokenizer = args.model
     optimizer_g: Optimizer = build_optimizer(model, args.optimizer_g)
     lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
     loss_module: VQGANLoss = args.loss
