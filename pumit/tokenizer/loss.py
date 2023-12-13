@@ -34,7 +34,7 @@ def calculate_adaptive_weight(
 def hinge_loss(score_real: torch.Tensor, score_fake: torch.Tensor):
     return (1 - score_real).relu().mean() + (1 + score_fake).relu().mean()
 
-class VQGANLoss(nn.Module):
+class VQVTLoss(nn.Module):
     def __init__(
         self,
         quant_weight: float,
@@ -45,7 +45,7 @@ class VQGANLoss(nn.Module):
         perceptual_weight: float = 1.0,
         max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
-        adaptive_gan_weight: bool = True,
+        adaptive_gan_weight: bool = False,
     ):
         super().__init__()
         self.quant_weight = quant_weight

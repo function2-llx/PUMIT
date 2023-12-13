@@ -7,18 +7,17 @@ from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as LightningFabric
 from lightning.pytorch.loggers import WandbLogger
 import torch
-from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
 
+from luolib.lightning import OptimizationConf, build_hybrid_optimization
 from luolib.models import spadop
 from luolib.models.utils import load_ckpt
-from luolib.types import LRSchedulerConfig
 
 from pumit.datamodule import PUMITDataModule
-from pumit.optim import build_optimizer, build_lr_scheduler
-from pumit.tokenizer import VQGANLoss, VQVisualTokenizer
+from pumit.tokenizer import VQVTLoss, VQVisualTokenizer
+from pumit.tokenizer.quantize import GumbelVQ
 
 class Fabric(LightningFabric):
     # https://github.com/Lightning-AI/lightning/issues/18106
@@ -61,11 +60,9 @@ def get_parser():
     parser = ArgumentParser()
     parser.add_argument('-c', '--config', action=ActionConfigFile)
     parser.add_subclass_arguments(VQVisualTokenizer, 'model')
-    parser.add_argument('--optimizer_g', type=dict)
-    parser.add_argument('--lr_scheduler_g', type=LRSchedulerConfig)
-    parser.add_class_arguments(VQGANLoss, 'loss')
-    parser.add_argument('--optimizer_d', type=dict)
-    parser.add_argument('--lr_scheduler_d', type=LRSchedulerConfig)
+    parser.add_argument('--optim_g', type=list[OptimizationConf], enable_path=True)
+    parser.add_class_arguments(VQVTLoss, 'loss')
+    parser.add_argument('--optim_d', type=list[OptimizationConf], enable_path=True)
     parser.add_class_arguments(PUMITDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
     parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
@@ -140,11 +137,10 @@ def main():
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = training_args.benchmark
     model: VQVisualTokenizer = args.model
-    optimizer_g: Optimizer = build_optimizer(model, args.optimizer_g)
-    lr_scheduler_g = build_lr_scheduler(optimizer_g, args.lr_scheduler_g, training_args.max_steps)
-    loss_module: VQGANLoss = args.loss
-    optimizer_d: Optimizer = build_optimizer(loss_module.discriminator, args.optimizer_d)
-    lr_scheduler_d = build_lr_scheduler(optimizer_d, args.lr_scheduler_d, training_args.max_steps)
+    optimizer_g, lr_scheduler_g = build_hybrid_optimization(model, args.optim_g)
+    loss_module: VQVTLoss = args.loss
+    optimizer_d, lr_scheduler_d = build_hybrid_optimization(loss_module.discriminator, args.optim_d)
+
     if fabric.is_global_zero:
         Path(save_dir / 'model.txt').write_text(repr(model))
         Path(save_dir / 'discriminator.txt').write_text(repr(loss_module.discriminator))
@@ -203,7 +199,8 @@ def main():
     ):
         x = 2 * x - 1
         x = spadop.SpatialTensor(x, aniso_d)
-        model.quantize.adjust_temperature(step, training_args.max_steps)
+        if isinstance(model.quantize, GumbelVQ):
+            model.quantize.adjust_temperature(step, training_args.max_steps)
         x_rec, vq_out = model.forward(x, fabric)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
@@ -238,8 +235,8 @@ def main():
         optimized_steps = step + 1
         if optimized_steps % training_args.log_every_n_steps == 0 or optimized_steps == training_args.max_steps:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
-            if model.quantize.mode == 'gumbel':
-                fabric.log('train/temperature', model.quantize.temperature,  optimized_steps)
+            if isinstance(model.quantize, GumbelVQ):
+                fabric.log('train/temperature', model.quantize.temperature, optimized_steps)
         if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
             step_save_dir = img_save_dir / f'step-{optimized_steps}'
             step_save_dir.mkdir(parents=True)
