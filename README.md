@@ -1,5 +1,7 @@
 # pumit
 
+You may want to switch to the `submit` branch to reproduce the results from the [arxiv paper](https://arxiv.org/abs/2312.07630), note that submodules need checkout as well.
+
 ## Create Environment
 
 [Mamba](https://mamba.readthedocs.io) is recommended to manage virtual environments. 
