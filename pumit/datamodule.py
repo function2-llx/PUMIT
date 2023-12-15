@@ -55,7 +55,7 @@ class TransformConf:
     stride: int = 16
     isotropic_th: float = 3.,
 
-class pumitDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
+class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
     def __init__(
         self,
         data: list[dict],
@@ -69,7 +69,7 @@ class pumitDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
         weight: torch.Tensor | None = None,
         buffer_size: int = 16384,
     ):
-        super().__init__(data)
+        super().__init__()
         self.data = data
         self.num_batches = num_batches
         self.num_skip_batches = num_skip_batches
@@ -245,7 +245,7 @@ class PUMITDataModule(LightningDataModule):
         return DataLoader(
             PumitDataset(data, self.train_transform()),
             conf.num_workers,
-            batch_sampler=pumitDistributedBatchSampler(
+            batch_sampler=PUMITDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
                 self.world_size, self.global_rank, self.R, conf.train_batch_size, weight,
             ),
