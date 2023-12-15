@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 from torchvision import transforms as tvt
 
+from luolib import transforms as lt
 from luolib.types import tuple3_t
 from luolib.utils import SavedSet, get_cuda_device, process_map
 from monai import transforms as mt
@@ -86,7 +87,7 @@ class DatasetProcessor(ABC):
         if len(results) == 0:
             return
         info, meta = zip(*results)
-        info = pd.DataFrame.from_records(cytoolz.concat(results), index='key')
+        info = pd.DataFrame.from_records(info, index='key')
         info_path = self.output_root / 'info.csv'
         meta_path = self.output_root / 'meta.pkl'
         if info_path.exists():
@@ -159,14 +160,16 @@ class DatasetProcessor(ABC):
         if is_natural_modality(modality):
             minv = 0
         else:
-            minv = torch.quantile(img, 0.23 / 100)
-            maxv = torch.quantile(img, 99.73 / 100)
+            minv = lt.quantile(img, 0.23 / 100)
+            maxv = lt.quantile(img, 99.73 / 100)
             img[img < minv] = minv
             img[img > maxv] = maxv
+        # 2. crop foreground
         original_shape = img.shape
         # make MONAI happy about the deprecated default
         cropper = mt.CropForeground(lambda x: x > minv, allow_smaller=True)
         cropped = cropper(img)
+        # 3. scale intensity to [0, 1]
         if is_natural_modality(modality):
             minv = 0
             maxv = 255
@@ -181,7 +184,7 @@ class DatasetProcessor(ABC):
             - human-readable information that will be stored in `info.csv`
             - metadata
         """
-        img = self.adjust_orientation(img)
+        img = self.adjust_orientation(img).contiguous()
         cropped, original_shape = self.normalize_image(img, modality)
         if (r := MAX_SMALLER_EDGE / min(cropped.shape[2:])) < 1:
             resizer = mt.Resize((-1, round(cropped.shape[2] * r), round(cropped.shape[3] * r)), anti_aliasing=True)
