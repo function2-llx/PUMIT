@@ -116,7 +116,6 @@ class DatasetProcessor(ABC):
         except Exception as e:
             print(file.path)
             print(e)
-            raise e
             return [], False
         finally:
             if self.empty_cache:
@@ -1082,7 +1081,7 @@ def main():
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--exclude', nargs='*', type=str, default=[])
     parser.add_argument('--ie', action='store_true', help='ignore exception')
-    parser.add_argument('--max_workers', type=int, default=32)
+    parser.add_argument('--max_workers', type=int, default=24)
     parser.add_argument('--chunksize', type=int, default=1)
     parser.add_argument('--override', action='store_true')
     args = parser.parse_args()
