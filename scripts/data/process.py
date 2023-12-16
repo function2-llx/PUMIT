@@ -40,7 +40,7 @@ def setup_logging():
     ch.setFormatter(formatter)
 
     # Add the handlers to the logger
-    logger = logging.getLogger()
+    logger = logging.getLogger('process')
     logger.addHandler(fh)
     logger.addHandler(ch)
 
@@ -142,7 +142,8 @@ class DatasetProcessor(ABC):
         except Exception as e:
             logger.error(file.path)
             logger.error(e)
-            raise e
+            import traceback
+            logger.error(traceback.format_exc())
             return [], False
         finally:
             if self.empty_cache:
@@ -225,10 +226,11 @@ class DatasetProcessor(ABC):
         new_shape = np.round(np.array(cropped.shape[1:]) / scale).astype(np.int32)
         if tuple(new_shape.tolist()) == cropped.shape[1:]:
             resized = cropped
-        elif new_shape[0] == img.shape[1]:
+        elif new_shape[0] == cropped.shape[1]:
             from torchvision.transforms.v2 import functional as tvtf
             from torchvision.transforms import InterpolationMode
-            resized = tvtf.resize(cropped, new_shape[1:].tolist(), InterpolationMode.BICUBIC, antialias=True)
+            resized: MetaTensor = tvtf.resize(cropped, new_shape[1:].tolist(), InterpolationMode.BICUBIC, antialias=True)
+            resized.affine[:3, 1:3] @= torch.diag(torch.full((2, ), scale_xy, dtype=resized.affine.dtype))
         else:
             anti_aliasing_filter = mt.GaussianSmooth((scale - 1) / 2)
             filtered = anti_aliasing_filter(cropped)
