@@ -11,13 +11,12 @@ import cytoolz
 import numpy as np
 import pandas as pd
 import torch
-from torchvision import transforms as tvt
 
 from luolib import transforms as lt
-from luolib.types import tuple3_t
 from luolib.utils import SavedSet, concat_drop_dup, get_cuda_device, process_map
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
+from monai.utils import GridSampleMode
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('processed-data')
@@ -117,6 +116,7 @@ class DatasetProcessor(ABC):
         except Exception as e:
             print(file.path)
             print(e)
+            raise e
             return [], False
         finally:
             if self.empty_cache:
@@ -151,19 +151,25 @@ class DatasetProcessor(ABC):
         else:
             return img
 
-    def normalize_image(self, img: MetaTensor, modality: str) -> tuple[MetaTensor, tuple3_t[int]]:
+    def normalize_image(self, img: MetaTensor, modality: str) -> MetaTensor:
         """
         1. clip intensity for non-natural images
         2. crop foreground by
             - 0 for natural images
             - minimum for non-natural images
-        3. scale intensity to [0, 1]
-        Returns:
-            (cropped & scaled image, original_shape)
+        3. translate intensity to [0, ...] (convenient for zero padding)
+        4. resize & adjust spacing
+        5. rescale intensity to [0, 1]
+        Args:
+            img: image data after adjusting orientation
+            modality
         """
         img = img.float()
+        is_natural = is_natural_modality(modality)
+        if not is_natural:
+            assert img.shape[0] == 1
         # 1. clip intensity
-        if is_natural_modality(modality):
+        if is_natural:
             minv = 0
         else:
             minv = lt.quantile(img, 0.23 / 100)
@@ -171,18 +177,50 @@ class DatasetProcessor(ABC):
             img[img < minv] = minv
             img[img > maxv] = maxv
         # 2. crop foreground
-        original_shape = img.shape[1:]
-        # make MONAI happy about the deprecated default
+        # specify `allow_smaller` to make MONAI happy about the deprecated default
         cropper = mt.CropForeground(lambda x: x > minv, allow_smaller=True)
-        cropped = cropper(img)
-        # 3. scale intensity to [0, 1]
-        if is_natural_modality(modality):
+        cropped: MetaTensor = cropper(img)
+        # 3. translate intensity to [0, ...]
+        if is_natural:
             minv = 0
-            maxv = 255
         else:
             minv = cropped.min().item()
-            maxv = cropped.max().item()
-        return (cropped - minv) / (maxv - minv), original_shape
+            cropped -= minv
+        # 4. resize & adjust spacing
+        if MAX_SMALLER_EDGE < (smaller_edge := min(cropped.shape[2:])):
+            scale_xy = smaller_edge / MAX_SMALLER_EDGE
+        else:
+            scale_xy = 1.
+        new_spacing_xy = min(cropped.pixdim[2:]) * scale_xy
+        if cropped.pixdim[0] < new_spacing_xy:
+            scale_z = new_spacing_xy / cropped.pixdim[0]
+        else:
+            scale_z = 1.
+        scale = np.array([scale_z, scale_xy, scale_xy])
+        new_shape = np.round(np.array(cropped.shape[1:]) / scale).astype(np.int32)
+        if tuple(new_shape.tolist()) == cropped.shape[1:]:
+            resized = cropped
+        elif new_shape[0] == img.shape[1]:
+            from torchvision.transforms.v2 import functional as tvtf
+            from torchvision.transforms import InterpolationMode
+            resized = tvtf.resize(cropped, new_shape[1:].tolist(), InterpolationMode.BICUBIC, antialias=True)
+        else:
+            anti_aliasing_filter = mt.GaussianSmooth((scale - 1) / 2)
+            filtered = anti_aliasing_filter(cropped)
+            resizer = mt.Affine(
+                scale_params=scale.tolist(),
+                spatial_size=new_shape,
+                mode=GridSampleMode.BICUBIC,
+                image_only=True,
+            )
+            resized = resizer(filtered)
+        # 5. rescale intensity to [0, 1]
+        resized[resized <= 0] = 0
+        if is_natural:
+            maxv = 255
+        else:
+            maxv = resized.max()
+        return resized / maxv
 
     def process_image(self, img: MetaTensor, key: str, modality: str | dict, weight: float) -> tuple[dict, dict]:
         """
@@ -191,25 +229,29 @@ class DatasetProcessor(ABC):
             - metadata
         """
         img = self.adjust_orientation(img).contiguous()
-        cropped, original_shape = self.normalize_image(img, modality)
-        if (r := MAX_SMALLER_EDGE / min(cropped.shape[2:])) < 1:
-            resizer = mt.Resize((-1, round(cropped.shape[2] * r), round(cropped.shape[3] * r)), anti_aliasing=True)
-            cropped = resizer(cropped)
-        spacing = cropped.pixdim.numpy()
+        original_shape = img.shape[1:]
+        original_spacing = img.pixdim.numpy()
+        normed = self.normalize_image(img, modality)
+        shape = normed.shape[1:]
+        spacing = normed.pixdim.numpy()
         info = {
             'key': key,
             'modality': modality,
             **{
                 f'shape-{i}': s
-                for i, s in enumerate(cropped.shape[1:])
+                for i, s in enumerate(shape)
             },
             **{
                 f'space-{i}': s.item()
                 for i, s in enumerate(spacing)
             },
             **{
-                f'shape-origin-{i}': s
+                f'shape-o-{i}': s
                 for i, s in enumerate(original_shape)
+            },
+            **{
+                f'space-o-{i}': s.item()
+                for i, s in enumerate(original_spacing)
             },
             'weight': weight,
         }
@@ -217,14 +259,14 @@ class DatasetProcessor(ABC):
             'key': key,
             'modality': modality,
             'spacing': spacing,
-            'shape': tuple(cropped.shape[1:]),
+            'shape': tuple(shape),
             'weight': weight,
         }
         if not is_natural_modality(modality):
-            meta['mean'] = cropped.mean(dim=(1, 2, 3)).item()
-            meta['std'] = cropped.std(dim=(1, 2, 3)).item()
+            meta['mean'] = normed.mean(dim=(1, 2, 3)).item()
+            meta['std'] = normed.std(dim=(1, 2, 3)).item()
 
-        np.save(self.output_root / 'data' / f'{key}.npy', cropped.cpu().numpy().astype(np.float16))
+        np.save(self.output_root / 'data' / f'{key}.npy', normed.cpu().numpy().astype(np.float16))
         return info, meta
 
 class Default3DLoaderMixin:
@@ -239,11 +281,8 @@ class Default3DLoaderMixin:
 class NaturalImageLoaderMixin:
     assert_gray_scale: bool = False
 
-    def __init__(self):
-        self.resize = tvt.Resize(MAX_SMALLER_EDGE, antialias=True)
-        self.crop = mt.CropForeground(allow_smaller=False)
-
-    def check_and_adapt_to_3d(self, img: MetaTensor):
+    def check_and_adapt_to_3d(self, img):
+        img = MetaTensor(img.byte())
         if img.shape[0] == 4:
             assert (img[3] == 255).all()
             img = img[:3]
@@ -254,19 +293,12 @@ class NaturalImageLoaderMixin:
         img.affine[0, 0] = 1e8
         return img
 
-    def load(self, path: Path, device: torch.device):
-        """this function will crop & resize natural images in advance"""
-        from torchvision.io import read_image
-        img = read_image(str(path)).to(device)
-        img = self.crop(img)
-        if min(img.shape[1:]) > MAX_SMALLER_EDGE:
-            img = self.resize(img.div(255)).mul(255)
-        img = MetaTensor(img.byte())
-        return img
-
     def get_loader(self, device: torch.device) -> Callable[[Path], MetaTensor]:
+        from torchvision.io import read_image
         return mt.Compose([
-            cytoolz.partial(self.load, device=device),
+            str,
+            read_image,
+            mt.ToDevice(device),
             self.check_and_adapt_to_3d,
         ])
 
@@ -530,6 +562,7 @@ class EPISURGProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class FLARE22Processor(Default3DLoaderMixin, DatasetProcessor):
     name = 'FLARE22'
+    orientation = 'SRA'
 
     def get_image_files(self):
         image_folders = [
@@ -1049,7 +1082,7 @@ def main():
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--exclude', nargs='*', type=str, default=[])
     parser.add_argument('--ie', action='store_true', help='ignore exception')
-    parser.add_argument('--max_workers', type=int, default=16)
+    parser.add_argument('--max_workers', type=int, default=32)
     parser.add_argument('--chunksize', type=int, default=1)
     parser.add_argument('--override', action='store_true')
     args = parser.parse_args()
