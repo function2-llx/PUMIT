@@ -383,7 +383,7 @@ class BrainPTM2021Processor(Default3DLoaderMixin, DatasetProcessor):
 
     def get_image_files(self):
         ret = []
-        for case_dir in self.dataset_root.glob('case_7*'):
+        for case_dir in self.dataset_root.glob('case_*'):
             key = case_dir.name
             ret.append(ImageFile(f'{key}-T1', 'MRI/T1', case_dir / 'T1.nii.gz'))
             ret.append(ImageFile(f'{key}-DWI', 'MRI/DWI', case_dir / 'Diffusion.nii.gz'))
