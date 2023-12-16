@@ -15,10 +15,9 @@ from torchvision import transforms as tvt
 
 from luolib import transforms as lt
 from luolib.types import tuple3_t
-from luolib.utils import SavedSet, get_cuda_device, process_map
+from luolib.utils import SavedSet, concat_drop_dup, get_cuda_device, process_map
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
-from monai.utils import MetaKeys
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('processed-data')
@@ -38,11 +37,17 @@ def is_natural_modality(modality: str) -> bool:
 
 class DatasetProcessor(ABC):
     name: str
-    max_workers: int = 8
-    chunksize: int = 1
+    max_workers: int | None = None
+    chunksize: int | None = None
     empty_cache: bool = False
     orientation: str | None = None
     """if orientation is None, will determine it from the spacing"""
+
+    def update_multiprocessing(self, max_workers: int, chunksize: int, override: bool):
+        if self.max_workers is None or override:
+            self.max_workers = max_workers
+        if self.chunksize is None or override:
+            self.chunksize = chunksize
 
     @property
     def dataset_root(self):
@@ -88,14 +93,15 @@ class DatasetProcessor(ABC):
             return
         info, meta = zip(*results)
         info = pd.DataFrame.from_records(info, index='key')
+        meta = pd.DataFrame.from_records(meta, index='key')
         info_path = self.output_root / 'info.csv'
         meta_path = self.output_root / 'meta.pkl'
         if info_path.exists():
-            info = pd.concat([pd.read_csv(info_path, index_col='key', dtype={'key': 'string'}), info])
-            meta = pd.read_pickle(meta_path) + meta
+            info = concat_drop_dup([pd.read_csv(info_path, index_col='key', dtype={'key': 'string'}), info])
+            meta = concat_drop_dup([pd.read_pickle(meta_path), meta])
         info.to_csv(info_path)
         info.to_excel(info_path.with_suffix('.xlsx'), freeze_panes=(1, 1))
-        pd.to_pickle(meta, meta_path)
+        meta.to_pickle(meta_path)
         processed.save_list([file.key for file, ok in zip(files, status) if ok])
 
     def process_file(self, file: ImageFile):
@@ -131,7 +137,7 @@ class DatasetProcessor(ABC):
 
     def adjust_orientation(self, img: MetaTensor):
         if self.orientation is not None:
-            return img
+            return mt.Orientation(self.orientation)(img)
         # TODO: for isotropic image, perhaps create multiple instances, but it may also be handled in data augmentation
         if abs(img.pixdim[1] - img.pixdim[2]) > 1e-2:
             codes = ['RAS', 'ASR', 'SRA']
@@ -165,7 +171,7 @@ class DatasetProcessor(ABC):
             img[img < minv] = minv
             img[img > maxv] = maxv
         # 2. crop foreground
-        original_shape = img.shape
+        original_shape = img.shape[1:]
         # make MONAI happy about the deprecated default
         cropper = mt.CropForeground(lambda x: x > minv, allow_smaller=True)
         cropped = cropper(img)
@@ -203,7 +209,7 @@ class DatasetProcessor(ABC):
             },
             **{
                 f'shape-origin-{i}': s
-                for i, s in enumerate(img.meta[MetaKeys.SPATIAL_SHAPE])
+                for i, s in enumerate(original_shape)
             },
             'weight': weight,
         }
@@ -260,7 +266,7 @@ class NaturalImageLoaderMixin:
 
     def get_loader(self, device: torch.device) -> Callable[[Path], MetaTensor]:
         return mt.Compose([
-            cytoolz.partial(self.load, device),
+            cytoolz.partial(self.load, device=device),
             self.check_and_adapt_to_3d,
         ])
 
@@ -418,23 +424,35 @@ class ChákṣuProcessor(NaturalImageLoaderMixin, DatasetProcessor):
 class CheXpertProcessor(NaturalImageLoaderMixin, DatasetProcessor):
     name = 'CheXpert'
     assert_gray_scale: bool = True
-    max_workers = 16
+    max_workers = 64
     chunksize = 10
 
     @property
     def dataset_root(self):
-        return DATASETS_ROOT / self.name / 'chexpertchestxrays-u20210408'
+        return DATASETS_ROOT / self.name / 'chexpertchestxrays-u20210408' / 'CheXpert-v1.0'
 
-    def get_image_files(self) -> Sequence[ImageFile]:
-        ret = []
-        for path in (self.dataset_root / 'CheXpert-v1.0').glob('*/*/*/*.jpg'):
-            ret.append(ImageFile(
+    @staticmethod
+    def get_patient_image_files(patient_dir: Path):
+        return [
+            ImageFile(
                 '-'.join([*path.parts[-3:-1], path.stem]),
                 'gray/XR',
                 path,
-            ))
+            )
+            for study_dir in patient_dir.iterdir()
+            for path in study_dir.glob('*.jpg')
+        ]
 
-        return ret
+    def get_image_files(self) -> Sequence[ImageFile]:
+        patient_dirs = []
+        for split in ['train', 'valid', 'test']:
+            patient_dirs.extend([*(self.dataset_root / split).iterdir()])
+        ret: list[list[ImageFile]] = process_map(
+            self.get_patient_image_files, patient_dirs,
+            max_workers=self.max_workers, desc='get image files', ncols=80, chunksize=10,
+        )
+
+        return [*cytoolz.concat(ret)]
 
 class CHAOSProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'CHAOS'
@@ -512,7 +530,6 @@ class EPISURGProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class FLARE22Processor(Default3DLoaderMixin, DatasetProcessor):
     name = 'FLARE22'
-    max_workers = 4
 
     def get_image_files(self):
         image_folders = [
@@ -528,7 +545,6 @@ class FLARE22Processor(Default3DLoaderMixin, DatasetProcessor):
 
 class HaNSegProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'HaN-Seg'
-    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         modality_map = {
@@ -819,8 +835,6 @@ class MSDColonProcessor(MSDProcessor):
 class NCTCTProcessor(Default3DLoaderMixin, TCIAProcessor):
     name = 'NCTCT'
     reader = PydicomReader
-    max_workers = 4
-    empty_cache: bool = True
 
     @property
     def dataset_root(self):
@@ -837,7 +851,7 @@ class NCTCTProcessor(Default3DLoaderMixin, TCIAProcessor):
 class NIHChestXRayProcessor(NaturalImageLoaderMixin, DatasetProcessor):
     name = 'NIHChestX-ray'
     assert_gray_scale = True
-    max_workers = 16
+    max_workers = 64
     chunksize = 10
 
     @property
@@ -943,7 +957,6 @@ class ProstateMRIProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class RibFracProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'RibFrac'
-    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         suffix = '-image.nii.gz'
@@ -965,8 +978,6 @@ class RSNA2020PEDProcessor(Default3DLoaderMixin, DatasetProcessor):
 class RSNA2022CSFDProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'RSNA-2022-CSFD'
     reader = PydicomReader
-    max_workers = 4
-    empty_cache = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -977,8 +988,6 @@ class RSNA2022CSFDProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class STOICProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'STOIC'
-    max_workers = 4
-    empty_cache = True
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -988,6 +997,7 @@ class STOICProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class TotalSegmentatorProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'TotalSegmentator'
+    orientation = 'SRA'
 
     def get_image_files(self) -> Sequence[ImageFile]:
         return [
@@ -1000,7 +1010,6 @@ class TotalSegmentatorProcessor(Default3DLoaderMixin, DatasetProcessor):
 
 class VerSeProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'VerSe'
-    max_workers = 4
 
     def get_image_files(self) -> Sequence[ImageFile]:
         suffix = '.nii.gz'
@@ -1012,6 +1021,7 @@ class VerSeProcessor(Default3DLoaderMixin, DatasetProcessor):
 class VSSEGProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'Vestibular-Schwannoma-SEG'
     reader = PydicomReader
+    orientation = 'SRA'
 
     @property
     def dataset_root(self):
@@ -1037,10 +1047,11 @@ def main():
     parser = ArgumentParser()
     parser.add_argument('datasets', nargs='*', type=str)
     parser.add_argument('--all', action='store_true')
-    parser.add_argument('--exclude', nargs='*', type=str)
+    parser.add_argument('--exclude', nargs='*', type=str, default=[])
     parser.add_argument('--ie', action='store_true', help='ignore exception')
-    parser.add_argument('--max_workers', type=int | None, default=None)
-    parser.add_argument('--chunksize', type=int | None, default=None)
+    parser.add_argument('--max_workers', type=int, default=16)
+    parser.add_argument('--chunksize', type=int, default=1)
+    parser.add_argument('--override', action='store_true')
     args = parser.parse_args()
     if args.all:
         exclude = set(args.exclude + [MSDBrainTumourProcessor.__name__[:-len('Processor')]])
@@ -1058,11 +1069,8 @@ def main():
             print(f'no processor for {dataset}')
         else:
             processor = processor_cls()
-            if args.max_workers is not None:
-                processor.max_workers = args.max_workers
-            if args.chunksize is not None:
-                processor.chunksize = args.chunksize
-            print(dataset)
+            processor.update_multiprocessing(args.max_workers, args.chunksize, args.override)
+            print(dataset, f'max_workers: {processor.max_workers}, chunksize: {processor.chunksize}')
             try:
                 processor.process()
             except Exception as e:

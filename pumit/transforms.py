@@ -14,7 +14,7 @@ class UpdateSpacingD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
         data = dict(data)
         img: MetaTensor = data[DataKey.IMG]
-        spacing = [data[f'space-{i}'] for i in range(3)]
+        spacing = data['spacing']
         img.affine = np.diag([*spacing, 1])
         return data
 

@@ -13,21 +13,18 @@ from luolib import transforms as lt
 from luolib.types import tuple2_t
 from luolib.utils import DataKey
 from monai.config import PathLike
-from monai.data import Dataset as MONAIDataset, DataLoader, MetaTensor
+from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
-from pumit.reader import PumitReader
-from pumit.transforms import (
-    AdaptivePadD, AsSpatialTensorD, RandAffineCropD, CenterScaleCropD, UpdateSpacingD,
-    ensure_rgb,
-)
+from pumit.reader import PUMITReader
+from pumit.transforms import AdaptivePadD, AsSpatialTensorD, RandAffineCropD, UpdateSpacingD
 
 DATA_ROOT = Path('processed-data')
 
 @dataclass(kw_only=True)
 class DataLoaderConf:
     train_batch_size: int | None = None
-    val_batch_size: int = 1  # or help me write another distributed batch sampler for validation
+    val_batch_size: int = 1  # default=1, or help me write another distributed batch sampler for validation
     num_train_batches: int | None = None
     num_workers: int = 8
 
@@ -137,7 +134,7 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
-class PumitDataset(TorchDataset):
+class PUMITDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
         self.transform = transform
@@ -164,7 +161,7 @@ class PUMITDataModule(LightningDataModule):
         dataset_names = []
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
-            if (dataset_dir / 'images-meta.csv').exists():
+            if (dataset_dir / 'meta.pkl').exists():
                 dataset_names.append(dataset_name)
             else:
                 print(f'skip {dataset_name}')
@@ -173,20 +170,14 @@ class PUMITDataModule(LightningDataModule):
         for dataset_name in dataset_names:
             dataset_dir = DATA_ROOT / dataset_name
             dataset_weight = dataset_weights.get(dataset_name, 1.)
-            if not (meta_path := dataset_dir / 'images-meta.csv').exists():
-                print(f'skip {dataset_name}')
-                continue
-            meta = pd.read_csv(meta_path, dtype={'key': 'string'})
+            meta: pd.DataFrame = pd.read_pickle(dataset_dir / 'meta.pkl')
             meta['weight'] *= dataset_weight
             meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
-                if pd.isna(modality):
-                    print(f"{dataset_name} missing {pd.isna(meta['modality']).sum()}")
-                else:
-                    sub_meta = meta[meta['modality'] == modality]
-                    val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)
-                    self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
-                    self.val_data = pd.concat([self.val_data, val_sample])
+                sub_meta = meta[meta['modality'] == modality]
+                val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)
+                self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
+                self.val_data = pd.concat([self.val_data, val_sample])
         self.dl_conf = dl_conf
         self.trans_conf = trans_conf
         self.device = torch.device(device)
@@ -209,7 +200,7 @@ class PUMITDataModule(LightningDataModule):
             [
                 lt.RandomizableLoadImageD(
                     DataKey.IMG,
-                    PumitReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
+                    PUMITReader(int(1.5 * trans_conf.train_tz * trans_conf.stride)),
                     image_only=True,
                 ),
                 mt.ToDeviceD(DataKey.IMG, self.device),
@@ -243,7 +234,7 @@ class PUMITDataModule(LightningDataModule):
         data = self.train_data.to_dict('records')
         weight = torch.from_numpy(self.train_data['weight'].to_numpy())
         return DataLoader(
-            PumitDataset(data, self.train_transform()),
+            PUMITDataset(data, self.train_transform()),
             conf.num_workers,
             batch_sampler=PUMITDistributedBatchSampler(
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
@@ -257,7 +248,7 @@ class PUMITDataModule(LightningDataModule):
 
     def val_transform(self) -> Callable:
         return mt.Compose([
-            mt.LoadImageD(DataKey.IMG, PumitReader, image_only=True),
+            mt.LoadImageD(DataKey.IMG, PUMITReader, image_only=True),
             UpdateSpacingD(),
             mt.CropForegroundD(DataKey.IMG, DataKey.IMG),
             AdaptivePadD(),
