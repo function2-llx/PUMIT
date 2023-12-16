@@ -1,5 +1,6 @@
 import hashlib
 import inspect
+import logging
 import itertools as it
 from abc import abstractmethod, ABC
 from collections.abc import Callable, Sequence
@@ -17,6 +18,31 @@ from luolib.utils import SavedSet, concat_drop_dup, get_cuda_device, process_map
 from monai import transforms as mt
 from monai.data import MetaTensor, PydicomReader
 from monai.utils import GridSampleMode
+
+logger: logging.Logger
+
+def setup_logging():
+    global logger
+
+    from datetime import datetime
+    logging.basicConfig(level=logging.INFO)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    log_dir = Path('process-log')
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(log_dir / f'{datetime.now().strftime("%Y-%m-%d-%H:%M:%S")}.log')
+    fh.setLevel(logging.DEBUG)
+
+    # Create formatter and add it to the handlers
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s]  %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+
+    # Add the handlers to the logger
+    logger = logging.getLogger()
+    logger.addHandler(fh)
+    logger.addHandler(ch)
 
 DATASETS_ROOT = Path('datasets')
 PROCESSED_ROOT = Path('processed-data')
@@ -76,7 +102,7 @@ class DatasetProcessor(ABC):
         files = [file for file in files if file.key not in processed]
         if len(files) == 0:
             return
-        print(f'{len(files)} files remaining')
+        logger.info(f'{len(files)} files remaining')
         (self.output_root / 'data').mkdir(parents=True, exist_ok=True)
         results, status = zip(
             *process_map(
@@ -114,8 +140,9 @@ class DatasetProcessor(ABC):
                 info['origin'] = file.path
             return ret, True
         except Exception as e:
-            print(file.path)
-            print(e)
+            logger.error(file.path)
+            logger.error(e)
+            raise e
             return [], False
         finally:
             if self.empty_cache:
@@ -173,8 +200,7 @@ class DatasetProcessor(ABC):
         else:
             minv = lt.quantile(img, 0.23 / 100)
             maxv = lt.quantile(img, 99.73 / 100)
-            img[img < minv] = minv
-            img[img > maxv] = maxv
+            img.clamp_(minv, maxv)
         # 2. crop foreground
         # specify `allow_smaller` to make MONAI happy about the deprecated default
         cropper = mt.CropForeground(lambda x: x > minv, allow_smaller=True)
@@ -214,7 +240,7 @@ class DatasetProcessor(ABC):
             )
             resized = resizer(filtered)
         # 5. rescale intensity to [0, 1]
-        resized[resized <= 0] = 0
+        resized.clamp_(0)
         if is_natural:
             maxv = 255
         else:
@@ -341,7 +367,7 @@ class AMOS22Processor(Default3DLoaderMixin, DatasetProcessor):
 
 class BrainPTM2021Processor(Default3DLoaderMixin, DatasetProcessor):
     name = 'BrainPTM-2021'
-    orientation = 'ASR'
+    orientation = 'SRA'
 
     def process_file_data(self, file: ImageFile, data: MetaTensor) -> list[tuple[dict, dict]]:
         if file.modality != 'MRI/DWI':
@@ -357,14 +383,14 @@ class BrainPTM2021Processor(Default3DLoaderMixin, DatasetProcessor):
 
     def get_image_files(self):
         ret = []
-        for case_dir in self.dataset_root.glob('case_*'):
+        for case_dir in self.dataset_root.glob('case_7*'):
             key = case_dir.name
             ret.append(ImageFile(f'{key}-T1', 'MRI/T1', case_dir / 'T1.nii.gz'))
             ret.append(ImageFile(f'{key}-DWI', 'MRI/DWI', case_dir / 'Diffusion.nii.gz'))
         return ret
 
 class BraTS2023SegmentationProcessor(Default3DLoaderMixin, DatasetProcessor):
-    orientation = 'SAR'
+    orientation = 'SRA'
 
     @property
     def output_name(self):
@@ -752,9 +778,9 @@ class IXIProcessor(Default3DLoaderMixin, DatasetProcessor):
         for group, items in dti_groups.items():
             all_idxes = [x[0] for x in items]
             if (min_idx := min(all_idxes)) != 0:
-                print('missing zero:', group)
+                logger.warning(f'missing zero: {group}')
             if max(all_idxes) - min_idx + 1 != len(items):
-                print('missing some diffusion:', group)
+                logger.warning(f'missing some diffusion: {group}')
             d_weight = adaptive_weight(len(items) - 1)
             ret.extend([
                 # not using `group` for key to keep the original formatting
@@ -1075,6 +1101,8 @@ class VSSEGProcessor(Default3DLoaderMixin, DatasetProcessor):
         return ret
 
 def main():
+    setup_logging()
+
     from jsonargparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('datasets', nargs='*', type=str)
@@ -1092,23 +1120,23 @@ def main():
             if inspect.isclass(cls) and issubclass(cls, DatasetProcessor) and hasattr(cls, 'name')
             and (name := cls.__name__[:-len('Processor')]) not in exclude
         ]
-        print(datasets)
+        logging.info(datasets)
     else:
         datasets = args.datasets
     for dataset in datasets:
         processor_cls: type[DatasetProcessor] | None = globals().get(f'{dataset}Processor', None)
         if processor_cls is None:
-            print(f'no processor for {dataset}')
+            logger.error(f'no processor for {dataset}')
         else:
             processor = processor_cls()
             processor.update_multiprocessing(args.max_workers, args.chunksize, args.override)
-            print(dataset, f'max_workers: {processor.max_workers}, chunksize: {processor.chunksize}')
+            logger.info(f'start processing {dataset}, max_workers={processor.max_workers}, chunksize={processor.chunksize}')
             try:
                 processor.process()
             except Exception as e:
                 if args.ie:
                     import traceback
-                    print(traceback.format_exc())
+                    logger.error(traceback.format_exc())
                 else:
                     raise e
 
