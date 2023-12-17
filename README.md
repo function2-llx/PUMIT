@@ -1,6 +1,8 @@
-# pumit
+# PUMIT
 
-You may want to switch to the `submit` branch to reproduce the results from the [arxiv paper](https://arxiv.org/abs/2312.07630), note that submodules need checkout as well.
+This is the code repository for the paper _Pre-trained Universal Medical Image Transformer_ ([arxiv](https://arxiv.org/abs/2312.07630))
+
+This repository keeps updating for further work. You may want to switch to the `submit` branch to reproduce the results from the paper, note that submodules need checkout as well.
 
 ## Create Environment
 
