@@ -1,6 +1,12 @@
 import einops
 import torch
 
+__all__ = [
+    'ensure_rgb',
+    'RGB_TO_GRAY_WEIGHT',
+    'rgb_to_gray',
+]
+
 def ensure_rgb(x: torch.Tensor, enable: bool = True, batched: bool = False) -> torch.Tensor:
     if enable and x.shape[batched] != 3:
         assert x.shape[batched] == 1

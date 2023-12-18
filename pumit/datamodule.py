@@ -53,6 +53,7 @@ class TransformConf:
     isotropic_th: float = 3.
 
 class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
+    """put samples with the same DA into a batch"""
     def __init__(
         self,
         data: list[dict],
@@ -103,13 +104,14 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
-    def gen_trans_info(self, data):
+    def gen_trans_info(self, data: dict):
         trans_conf = self.trans_conf
-        shape = np.array([data[f'shape-{i}'] for i in range(3)])
-        origin_size_xy = min(shape[1:])
-        spacing = np.array([data[f'space-{i}'] for i in range(3)])
+        shape = np.array(data['shape'])
+        origin_size_xy = shape[1:].min().item()
+        spacing = data['spacing']
         spacing_z = spacing[0]
         spacing_xy = min(spacing[1:])
+
         # down_i: how much to downsample along axis i
         down_xy = trans_conf.stride
         # token_i: number of tokens along axis i
@@ -122,19 +124,21 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
             )
         else:
             scale_xy = 1.
+
         if spacing_z <= trans_conf.isotropic_th * spacing_xy and self.R.uniform() < trans_conf.scale_z_p:
             scale_z = self.R.uniform(*trans_conf.scale_z)
         else:
             scale_z = 1.
-        # ratio of spacing z / spacing x
+        # ratio of spacing z / spacing x after scaling
         rz = np.clip(spacing_z * scale_z / (spacing_xy * scale_xy), 1, down_xy << 1)
         aniso_d = int(rz).bit_length() - 1
-        dz = max(down_xy >> aniso_d, 1)
-        tz = 1 if (1 << aniso_d > down_xy) else trans_conf.train_tz
+        down_z = max(down_xy >> aniso_d, 1)
+        token_z = 1 if (1 << aniso_d > down_xy) else trans_conf.train_tz
+
         trans_info = {
             'aniso_d': aniso_d,
-            'scale': (scale_z, scale_xy, scale_xy),
-            'size': (tz * dz, size_xy, size_xy),
+            'scale': np.array((scale_z, scale_xy, scale_xy)),
+            'size': np.array((token_z * down_z, size_xy, size_xy)),
         }
         return aniso_d, trans_info
 
@@ -144,17 +148,10 @@ class PUMITDataset(TorchDataset):
         self.transform = transform
 
     def __getitem__(self, item: tuple[int, dict]):
-        index, trans = item
+        index, trans_info = item
         data = dict(self.data[index])
-        data['_trans'] = trans
+        data['_trans'] = trans_info
         return mt.apply_transform(self.transform, data)
-
-class PUMITLoadImage(mt.Transform):
-    def __init__(self):
-        pass
-
-    def __call__(self, data: dict):
-        pass
 
 class PUMITDataModule(LightningDataModule):
     def __init__(
