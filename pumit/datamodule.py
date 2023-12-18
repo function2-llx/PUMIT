@@ -32,12 +32,12 @@ class DataLoaderConf:
 class TransformConf:
     train_tz: int
     val_tz: int = 4
-    train_tx: int
+    train_token_xy: int
     val_tx: int = 12
     rotate_p: float = 0.3
     scale_z: tuple2_t[float] = (0.8, 1.25)
     scale_z_p: float = 0.3
-    train_scale_x: tuple2_t[float]
+    train_scale_xy: tuple2_t[float]
     scale_x_p: float = 0.5
     val_scale_x: float = 1.5
     flip_p: float = 0.5
@@ -50,7 +50,7 @@ class TransformConf:
     gamma: tuple2_t[float] = (0.7, 1.5)
     gamma_p: float = 0.3
     stride: int = 16
-    isotropic_th: float = 3.,
+    isotropic_th: float = 3.
 
 class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
     def __init__(
@@ -83,44 +83,13 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
 
     def __iter__(self):
         remain_batches = self.num_batches
-        trans_conf = self.trans_conf
         bucket = {}
         next_rank = 0
         num_skipped_batches = 0
         while remain_batches > 0:
             for i in self.weight.multinomial(self.buffer_size).tolist():
                 data = self.data[i]
-                shape = np.array([data[f'shape-{i}'] for i in range(3)])
-                origin_size_x = min(shape[1:])
-                spacing = np.array([data[f'space-{i}'] for i in range(3)])
-                spacing_z = spacing[0]
-                spacing_x = min(spacing[1:])
-                # di: how much to downsample along axis i
-                dx = trans_conf.stride
-                # ti: n. tokens along axis i
-                tx = trans_conf.train_tx
-                size_x = tx * dx
-                if self.R.uniform() < trans_conf.scale_x_p:
-                    scale_x = self.R.uniform(
-                        trans_conf.train_scale_x[0],
-                        min(origin_size_x / size_x, trans_conf.train_scale_x[1]),
-                    )
-                else:
-                    scale_x = 1.
-                if spacing_z <= trans_conf.isotropic_th * spacing_x and self.R.uniform() < trans_conf.scale_z_p:
-                    scale_z = self.R.uniform(*trans_conf.scale_z)
-                else:
-                    scale_z = 1.
-                # ratio of spacing z / spacing x
-                rz = np.clip(spacing_z * scale_z / (spacing_x * scale_x), 1, dx << 1)
-                aniso_d = int(rz).bit_length() - 1
-                dz = max(dx >> aniso_d, 1)
-                tz = 1 if (1 << aniso_d > dx) else trans_conf.train_tz
-                trans_info = {
-                    'aniso_d': aniso_d,
-                    'scale': (scale_z, scale_x, scale_x),
-                    'size': (tz * dz, size_x, size_x),
-                }
+                aniso_d, trans_info = self.gen_trans_info(data)
                 bucket.setdefault(aniso_d, []).append((i, trans_info))
                 if len(batch := bucket[aniso_d]) == self.batch_size:
                     if next_rank == self.rank:
@@ -134,6 +103,41 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                     next_rank = (next_rank + 1) % self.num_replicas
                     bucket.pop(aniso_d)
 
+    def gen_trans_info(self, data):
+        trans_conf = self.trans_conf
+        shape = np.array([data[f'shape-{i}'] for i in range(3)])
+        origin_size_xy = min(shape[1:])
+        spacing = np.array([data[f'space-{i}'] for i in range(3)])
+        spacing_z = spacing[0]
+        spacing_xy = min(spacing[1:])
+        # down_i: how much to downsample along axis i
+        down_xy = trans_conf.stride
+        # token_i: number of tokens along axis i
+        token_xy = trans_conf.train_token_xy
+        size_xy = token_xy * down_xy
+        if self.R.uniform() < trans_conf.scale_x_p:
+            scale_xy = self.R.uniform(
+                trans_conf.train_scale_xy[0],
+                min(origin_size_xy / size_xy, trans_conf.train_scale_xy[1]),
+            )
+        else:
+            scale_xy = 1.
+        if spacing_z <= trans_conf.isotropic_th * spacing_xy and self.R.uniform() < trans_conf.scale_z_p:
+            scale_z = self.R.uniform(*trans_conf.scale_z)
+        else:
+            scale_z = 1.
+        # ratio of spacing z / spacing x
+        rz = np.clip(spacing_z * scale_z / (spacing_xy * scale_xy), 1, down_xy << 1)
+        aniso_d = int(rz).bit_length() - 1
+        dz = max(down_xy >> aniso_d, 1)
+        tz = 1 if (1 << aniso_d > down_xy) else trans_conf.train_tz
+        trans_info = {
+            'aniso_d': aniso_d,
+            'scale': (scale_z, scale_xy, scale_xy),
+            'size': (tz * dz, size_xy, size_xy),
+        }
+        return aniso_d, trans_info
+
 class PUMITDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
@@ -144,6 +148,13 @@ class PUMITDataset(TorchDataset):
         data = dict(self.data[index])
         data['_trans'] = trans
         return mt.apply_transform(self.transform, data)
+
+class PUMITLoadImage(mt.Transform):
+    def __init__(self):
+        pass
+
+    def __call__(self, data: dict):
+        pass
 
 class PUMITDataModule(LightningDataModule):
     def __init__(
@@ -172,7 +183,7 @@ class PUMITDataModule(LightningDataModule):
             dataset_weight = dataset_weights.get(dataset_name, 1.)
             meta: pd.DataFrame = pd.read_pickle(dataset_dir / 'meta.pkl')
             meta['weight'] *= dataset_weight
-            meta[DataKey.IMG] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
+            meta['img'] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
                 sub_meta = meta[meta['modality'] == modality]
                 val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)

@@ -199,6 +199,7 @@ class DatasetProcessor(ABC):
         if is_natural:
             minv = 0
         else:
+            # ±3σ of N(0, 1)
             minv = lt.quantile(img, 0.23 / 100)
             maxv = lt.quantile(img, 99.73 / 100)
             img.clamp_(minv, maxv)
