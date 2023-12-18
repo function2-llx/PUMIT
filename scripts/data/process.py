@@ -787,14 +787,14 @@ class ISLES22Processor(Default3DLoaderMixin, DatasetProcessor):
         return [
             ImageFile(
                 key := f'{case_dir.name}_ses-0001_{modality_name}',
-                f'MRI/{modality_name.upper()}',
+                f'MRI/{modality}',
                 case_dir / 'ses-0001' / subdir / f'{key}.nii.gz',
             )
             for case_dir in (self.dataset_root / 'ISLES-2022').glob('sub-strokecase*')
-            for subdir, modality_name in [
-                ('anat', 'FLAIR'),
-                ('dwi', 'adc'),
-                ('dwi', 'dwi'),
+            for subdir, modality_name, modality in [
+                ('anat', 'FLAIR', 'T2-FLAIR'),
+                ('dwi', 'adc', 'ADC'),
+                ('dwi', 'dwi', 'DWI'),
             ]
         ]
 
