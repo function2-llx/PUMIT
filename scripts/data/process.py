@@ -16,7 +16,7 @@ import torch
 from luolib import transforms as lt
 from luolib.utils import SavedSet, concat_drop_dup, get_cuda_device, process_map
 from monai import transforms as mt
-from monai.data import MetaTensor, PydicomReader
+from monai.data import MetaTensor, NrrdReader, PydicomReader
 from monai.utils import GridSampleMode
 
 logger: logging.Logger
@@ -603,6 +603,19 @@ class FLARE22Processor(Default3DLoaderMixin, DatasetProcessor):
             for folder in image_folders for path in folder.glob(f'*{suffix}')
         ]
 
+class FetalPlanesDBProcessor(NaturalImageLoaderMixin, DatasetProcessor):
+    name = 'FETAL_PLANES_DB'
+
+    def get_image_files(self):
+        return [
+            ImageFile(
+                key,
+                'RGB/US',
+                self.dataset_root / 'Images' / f'{key}.png',
+            )
+            for key in pd.read_csv(self.dataset_root / 'FETAL_PLANES_DB_data.csv', sep=';')['Image_name']
+        ]
+
 class HaNSegProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'HaN-Seg'
 
@@ -625,6 +638,10 @@ class TCIAProcessor(DatasetProcessor, ABC):
     def tcia_meta(self):
         meta = pd.read_csv(self.dataset_root / 'metadata.csv')
         return meta.drop_duplicates(subset='Series UID', keep='last').set_index('Series UID')
+
+    @property
+    def dataset_root(self):
+        return DATASETS_ROOT / self.name / 'download'
 
 class HNSCCProcessor(Default3DLoaderMixin, TCIAProcessor):
     name = 'HNSCC'
@@ -761,6 +778,25 @@ class IDRiDProcessor(NaturalImageLoaderMixin, DatasetProcessor):
                 ret.append(ImageFile(key, 'RGB/fundus', path))
         return ret
 
+class ISLES22Processor(Default3DLoaderMixin, DatasetProcessor):
+    name = 'ISLES22'
+    orientation = 'SRA'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(
+                key := f'{case_dir.name}_ses-0001_{modality_name}',
+                f'MRI/{modality_name.upper()}',
+                case_dir / 'ses-0001' / subdir / f'{key}.nii.gz',
+            )
+            for case_dir in (self.dataset_root / 'ISLES-2022').glob('sub-strokecase*')
+            for subdir, modality_name in [
+                ('anat', 'FLAIR'),
+                ('dwi', 'adc'),
+                ('dwi', 'dwi'),
+            ]
+        ]
+
 class IXIProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'IXI'
 
@@ -815,6 +851,16 @@ class LIDCIDRIProcessor(Default3DLoaderMixin, DatasetProcessor):
         return [
             ImageFile('_'.join(Path(path).parts[-3:-1]), 'CT', self.dataset_root / path)
             for path in meta['File Location']
+        ]
+
+class LNQ2023Processor(Default3DLoaderMixin, DatasetProcessor):
+    name = 'LNQ2023'
+    reader = NrrdReader
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(path.name, 'CT', path)
+            for path in self.dataset_root.glob('*/*-ct.nrrd')
         ]
 
 class MRSpineSegProcessor(Default3DLoaderMixin, DatasetProcessor):
@@ -1046,6 +1092,20 @@ class RSNA2022CSFDProcessor(Default3DLoaderMixin, DatasetProcessor):
             for path in (self.dataset_root / f'{split}_images').iterdir()
         ]
 
+class SPIDERProcessor(Default3DLoaderMixin, DatasetProcessor):
+    name = 'SPIDER'
+    orientation = 'RAS'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(
+                key := path.name,
+                f"MRI/{key.split('_')[1].upper()[:2]}",
+                path,
+            )
+            for path in (self.dataset_root / 'images').glob('*.mha')
+        ]
+
 class STOICProcessor(Default3DLoaderMixin, DatasetProcessor):
     name = 'STOIC'
 
@@ -1102,6 +1162,17 @@ class VSSEGProcessor(Default3DLoaderMixin, DatasetProcessor):
             ret.append(ImageFile(f'{path.parent.parent.name}_{modality}', f'MRI/{modality}', path))
         return ret
 
+class WORDProcessor(Default3DLoaderMixin, DatasetProcessor):
+    name = 'WORD'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        suffix = '.nii.gz'
+        return [
+            ImageFile(path.name[:-len(suffix)], 'CT', path)
+            for split_suffix in ['Tr', 'Val', 'Ts']
+            for path in (self.dataset_root / 'WORD-V0.1.0' / f'images{split_suffix}').glob(f'*{suffix}')
+        ]
+
 def main():
     setup_logging()
 
@@ -1122,7 +1193,7 @@ def main():
             if inspect.isclass(cls) and issubclass(cls, DatasetProcessor) and hasattr(cls, 'name')
             and (name := cls.__name__[:-len('Processor')]) not in exclude
         ]
-        logging.info(datasets)
+        logger.info(datasets)
     else:
         datasets = args.datasets
     for dataset in datasets:
