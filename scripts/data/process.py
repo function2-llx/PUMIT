@@ -19,6 +19,8 @@ from monai import transforms as mt
 from monai.data import MetaTensor, NrrdReader, PydicomReader
 from monai.utils import GridSampleMode
 
+from pumit.datamodule import DATA_ROOT as PROCESSED_ROOT
+
 logger: logging.Logger
 
 def setup_logging():
@@ -45,7 +47,6 @@ def setup_logging():
     logger.addHandler(ch)
 
 DATASETS_ROOT = Path('datasets')
-PROCESSED_ROOT = Path('processed-data')
 PROCESSED_ROOT.mkdir(exist_ok=True, parents=True)
 
 MAX_SMALLER_EDGE = 512
