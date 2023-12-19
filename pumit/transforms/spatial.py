@@ -3,7 +3,6 @@ from typing import Hashable, Mapping
 
 import numpy as np
 
-from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
 from monai.utils import ImageMetaKey
@@ -12,7 +11,7 @@ from pumit.transforms import ensure_rgb
 class UpdateSpacingD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
         data = dict(data)
-        img: MetaTensor = data[DataKey.IMG]
+        img: MetaTensor = data['img']
         spacing = data['spacing']
         img.affine = np.diag([*spacing, 1])
         return data
@@ -26,7 +25,7 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
     def __call__(self, data: Mapping[Hashable, ...], lazy: bool | None = None):
         data = dict(data)
         trans_info = data['_trans']
-        img: MetaTensor = data[DataKey.IMG]
+        img: MetaTensor = data['img']
         # following nnU-Net
         rotate_x_range = 0. if (img.pixdim[0] > self.isotropic_th * min(img.pixdim[1:])) else np.pi / 6
         rotate_range = (np.pi / 2, rotate_x_range, rotate_x_range)
@@ -41,7 +40,7 @@ class RandAffineCropD(mt.Randomizable, mt.LazyTransform):
             lazy=self.lazy if lazy is None else lazy,
             apply_pending=False,
         )
-        data[DataKey.IMG] = cropper(img)
+        data['img'] = cropper(img)
         return data
 
 class CenterScaleCropD(mt.LazyTransform):
@@ -54,7 +53,7 @@ class CenterScaleCropD(mt.LazyTransform):
 
     def __call__(self, data: Mapping[Hashable, ...], lazy: bool | None = None):
         data = dict(data)
-        img: MetaTensor = data[DataKey.IMG]
+        img: MetaTensor = data['img']
         origin_size_x = min(img.shape[2:])
         dx = self.stride
         tx = min(self.tx, math.ceil(origin_size_x / dx))
@@ -73,18 +72,18 @@ class CenterScaleCropD(mt.LazyTransform):
             lazy=self.lazy if lazy is None else lazy,
             apply_pending=False,
         )
-        data[DataKey.IMG] = cropper(img)
+        data['img'] = cropper(img)
         return data
 
 class AsSpatialTensorD(mt.Transform):
-    def __call__(self, data: Mapping[Hashable]):
-        img: MetaTensor = data[DataKey.IMG]
+    def __call__(self, data: Mapping[Hashable, ...]):
+        img: MetaTensor = data['img']
         return ensure_rgb(img.as_tensor()), data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
 
 class AdaptivePadD(mt.Transform):
     def __call__(self, data: Mapping):
         data = dict(data)
-        img: MetaTensor = data[DataKey.IMG]
+        img: MetaTensor = data['img']
         aniso_d = max(int(img.pixdim[0] / min(img.pixdim[1:])).bit_length() - 1, 0)
         modality = data['modality']
         d = max(64 >> aniso_d, 1)
