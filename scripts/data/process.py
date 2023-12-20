@@ -1,5 +1,6 @@
 import hashlib
 import inspect
+import json
 import logging
 import itertools as it
 from abc import abstractmethod, ABC
@@ -127,6 +128,15 @@ class DatasetProcessor(ABC):
         info.to_excel(info_path.with_suffix('.xlsx'), freeze_panes=(1, 1))
         meta.to_pickle(meta_path)
         processed.save_list([file.key for file, ok in zip(files, status) if ok])
+        is_2d = (info['shape-0'].to_numpy() == 1).all()
+        (self.output_root / 'dataset.json').write_text(json.dumps(
+            {
+                'dims': 2 if is_2d else 3,
+                'weights': meta['weight'].sum().item(),
+            },
+            indent=4,
+            ensure_ascii=False,
+        ))
 
     def process_file(self, file: ImageFile):
         """Load the data from file and process"""
@@ -586,6 +596,22 @@ class EPISURGProcessor(Default3DLoaderMixin, DatasetProcessor):
             key = '_'.join(path.parts[-3:-1])
             ret.append(ImageFile(key, 'MRI/T1', path))
         return ret
+
+class FDG_PET_CT_LesionsProcessor(Default3DLoaderMixin, DatasetProcessor):
+    name = 'FDG-PET-CT-Lesions'
+    orientation = 'SRA'
+
+    def get_image_files(self) -> Sequence[ImageFile]:
+        return [
+            ImageFile(
+                f'{patient_dir.name}-study{study_id}-{modality}',
+                modality,
+                study_dir / f'{modality}.nii.gz',
+            )
+            for patient_dir in (self.dataset_root / 'NIfTI').iterdir()
+            for study_id, study_dir in enumerate(patient_dir.iterdir())
+            for modality in ['CT', 'PET']
+        ]
 
 class FLARE22Processor(Default3DLoaderMixin, DatasetProcessor):
     name = 'FLARE22'

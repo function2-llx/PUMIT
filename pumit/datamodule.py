@@ -8,6 +8,7 @@ import pandas as pd
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
+from tqdm import tqdm
 
 from luolib import transforms as lt
 from luolib.types import tuple2_t
@@ -16,7 +17,7 @@ from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
 from pumit.reader import PUMITReader
-from pumit.transforms import AdaptivePadD, InputTransformD, PUMITLoader, UpdateSpacingD
+from pumit.transforms import AdaptivePadD, InputTransformD, PUMITLoader
 
 DATA_ROOT = Path('processed-data')
 
@@ -161,7 +162,7 @@ class PUMITDataset(TorchDataset):
 class PUMITDataModule(LightningDataModule):
     def __init__(
         self,
-        dataset_weights: dict[str, float],
+        # dataset_weights: dict[str, float],
         dl_conf: DataLoaderConf,
         trans_conf: TransformConf,
         seed: int | None = 42,
@@ -171,20 +172,35 @@ class PUMITDataModule(LightningDataModule):
         self.train_data = pd.DataFrame()
         self.val_data = pd.DataFrame()
         self.R = np.random.RandomState(seed)
-        dataset_names = []
+        # dataset_names = []
+        dataset_info = {}
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
-            if (dataset_dir / 'meta.pkl').exists():
-                dataset_names.append(dataset_name)
+            if (meta_path := dataset_dir / 'meta.pkl').exists():
+                meta = pd.read_pickle(meta_path)
+                is_2d = (meta['shape'].map(lambda shape: shape[0]).to_numpy() == 1).all()
+                dataset_info[dataset_name] = {
+                    'dims': 2 if is_2d else 3,
+                    # take sqrt to balance between datasets
+                    'weights': (weights := meta['weight'].sum()),
+                    'sqrt-weights': weights.sqrt(),
+                }
             else:
                 print(f'skip {dataset_name}')
-        # deterministic
-        dataset_names = sorted(dataset_names)
-        for dataset_name in dataset_names:
+        # sort to be deterministic
+        dataset_info = pd.DataFrame.from_dict(dataset_info, orient='index').sort_index()
+        weights_2d = dataset_info[dataset_info['dims'] == 2]['sqrt-weights'].sum()
+        weights_3d = dataset_info[dataset_info['dims'] == 3]['sqrt-weights'].sum()
+        # make the ratio of 2D:3D=1:3
+        weights_ratio = 3 * weights_2d / weights_3d
+        for dataset_name in dataset_info.index:
             dataset_dir = DATA_ROOT / dataset_name
-            dataset_weight = dataset_weights.get(dataset_name, 1.)
             meta: pd.DataFrame = pd.read_pickle(dataset_dir / 'meta.pkl')
-            meta['weight'] *= dataset_weight
+            dataset_weight_scale = 1 / dataset_info[dataset_name]['weights']
+            if dataset_info[dataset_name]['dims'] == 3:
+                dataset_weight_scale *= weights_ratio
+            dataset_info['scale'] = dataset_weight_scale
+            meta['weight'] *= dataset_weight_scale
             meta['img'] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
                 sub_meta = meta[meta['modality'] == modality]
@@ -263,7 +279,6 @@ class PUMITDataModule(LightningDataModule):
     def val_transform(self) -> Callable:
         return mt.Compose([
             mt.LoadImageD('img', PUMITReader, image_only=True),
-            UpdateSpacingD(),
             mt.CropForegroundD('img', 'img'),
             AdaptivePadD(),
         ])
