@@ -20,6 +20,7 @@ from monai.data import MetaTensor, NrrdReader, PydicomReader
 from monai.utils import GridSampleMode
 
 from pumit.datamodule import DATA_ROOT as PROCESSED_ROOT
+from pumit.utils import is_natural_modality
 
 logger: logging.Logger
 
@@ -57,9 +58,6 @@ class ImageFile:
     modality: str | list[str]
     path: Path
     weight: float = 1
-
-def is_natural_modality(modality: str) -> bool:
-    return modality.startswith('RGB') or modality.startswith('gray')
 
 class DatasetProcessor(ABC):
     name: str
