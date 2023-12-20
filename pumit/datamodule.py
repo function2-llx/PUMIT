@@ -11,7 +11,6 @@ from torch.utils.data import Dataset as TorchDataset, Sampler
 
 from luolib import transforms as lt
 from luolib.types import tuple2_t
-from luolib.utils import DataKey
 from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
@@ -30,6 +29,7 @@ class DataLoaderConf:
 
 @dataclass(kw_only=True)
 class TransformConf:
+    # spatial
     base_size_z: int = 128
     size_xy: int = 128
     rotate_p: float = 0.25
@@ -37,20 +37,24 @@ class TransformConf:
     scale_z_p: float = 0.25
     scale_xy: tuple2_t[float] = (0.75, 2)
     scale_xy_p: float = 0.5
-    flip_p: float = 0.5
+    # intensity
     scale_intensity: float = 0.25
     scale_intensity_p: float = 0.15
     shift_intensity: float = 0.1
-    shift_intensity_p: float = 0.
-    adjust_contrast: tuple2_t[float] = (0.75, 1.25)
-    adjust_contrast_p: float = 0.15
+    shift_intensity_p: float = 0.15
+
+    @dataclass
+    class AdjustContrast:
+        prob: float = 0.15
+        range: tuple2_t[float] = (0.75, 1.25)
+        preserve_intensity_range: bool = True
+    adjust_contrast: AdjustContrast = field(default_factory=AdjustContrast)
 
     @dataclass
     class GammaCorrection:
         prob: float = 0.3
         range: tuple2_t[float] = (0.7, 1.5)
-        prob_invert: float = 0.75
-        retain_stats: bool = True
+        prob_invert: float = 0.25
     gamma_correction: GammaCorrection = field(default_factory=GammaCorrection)
 
 def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomState) -> dict:
@@ -208,22 +212,29 @@ class PUMITDataModule(LightningDataModule):
         return mt.Compose(
             [
                 PUMITLoader(conf.rotate_p, self.device),
-                mt.RandScaleIntensityD(DataKey.IMG, conf.scale_intensity, conf.scale_intensity_p),
-                mt.RandShiftIntensityD(DataKey.IMG, conf.shift_intensity, prob=conf.shift_intensity_p),
-                lt.ClampIntensityD(DataKey.IMG),
-                lt.RandAdjustContrastD(DataKey.IMG, conf.adjust_contrast, conf.adjust_contrast_p),
+                mt.RandScaleIntensityD('img', conf.scale_intensity, prob=conf.scale_intensity_p, channel_wise=True),
+                mt.RandShiftIntensityD('img', conf.shift_intensity, prob=conf.shift_intensity_p, channel_wise=True),
+                lt.RandDictWrapper(
+                    'img',
+                    lt.RandAdjustContrast(
+                        conf.adjust_contrast.prob,
+                        conf.adjust_contrast.range,
+                        conf.adjust_contrast.preserve_intensity_range,
+                    ),
+                ),
+                lt.ClampIntensityD('img'),
                 lt.RandDictWrapper(
                     'img',
                     lt.RandGammaCorrection(
                         conf.gamma_correction.prob,
                         conf.gamma_correction.range,
                         conf.gamma_correction.prob_invert,
-                        conf.gamma_correction.retain_stats,
+                        False,
+                        False,
                     ),
                 ),
                 InputTransformD(),
             ],
-            lazy=True,
         )
 
     @staticmethod
@@ -251,9 +262,9 @@ class PUMITDataModule(LightningDataModule):
 
     def val_transform(self) -> Callable:
         return mt.Compose([
-            mt.LoadImageD(DataKey.IMG, PUMITReader, image_only=True),
+            mt.LoadImageD('img', PUMITReader, image_only=True),
             UpdateSpacingD(),
-            mt.CropForegroundD(DataKey.IMG, DataKey.IMG),
+            mt.CropForegroundD('img', 'img'),
             AdaptivePadD(),
         ])
 

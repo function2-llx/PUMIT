@@ -85,9 +85,8 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         affine_t[:3, :3] = affine
         patch_trans = mt.Compose(
             [
-                mt.SpatialPad(patch_size),
-                mt.CenterSpatialCrop(patch_size),
                 mt.Affine(affine=affine_t, spatial_size=patch_size, image_only=True),
+                *[mt.RandFlip(0.5, i) for i in range(3)],
             ],
             lazy=True,
             overrides={
