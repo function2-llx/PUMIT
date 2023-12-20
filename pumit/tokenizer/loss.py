@@ -121,6 +121,7 @@ class VQVTLoss(nn.Module):
         if vq_out.entropy is not None:
             vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
 
+        # always calculate GAN loss since it will be used elsewhere
         score_fake = self.discriminator(x_rec)
         gan_loss = -score_fake.mean()
         if use_gan_loss:

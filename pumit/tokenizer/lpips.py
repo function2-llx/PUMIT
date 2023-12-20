@@ -30,6 +30,7 @@ class InputNormLayer(nn.Module):
         return (x - self.mean) / self.std
 
 def normalize_tensor(x: torch.Tensor, eps: float = 1e-10):
+    """make each position of the feature map have a 2-norm of 1"""
     return x / (x.norm(dim=1, keepdim=True) + eps)
 
 class LPIPS(nn.Module):
