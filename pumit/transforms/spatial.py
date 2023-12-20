@@ -75,7 +75,7 @@ class CenterScaleCropD(mt.LazyTransform):
         data['img'] = cropper(img)
         return data
 
-class AsSpatialTensorD(mt.Transform):
+class InputTransformD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]):
         img: MetaTensor = data['img']
         return ensure_rgb(img.as_tensor()), data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]

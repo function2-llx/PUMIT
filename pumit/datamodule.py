@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from lightning import LightningDataModule
@@ -17,7 +17,7 @@ from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
 from pumit.reader import PUMITReader
-from pumit.transforms import AdaptivePadD, AsSpatialTensorD, RandAffineCropD, UpdateSpacingD
+from pumit.transforms import AdaptivePadD, InputTransformD, PUMITLoader, UpdateSpacingD
 
 DATA_ROOT = Path('processed-data')
 
@@ -30,12 +30,12 @@ class DataLoaderConf:
 
 @dataclass(kw_only=True)
 class TransformConf:
-    token_z: int = 8
-    token_xy: int = 8
-    rotate_p: float = 0.3
+    base_size_z: int = 128
+    size_xy: int = 128
+    rotate_p: float = 0.25
     scale_z: tuple2_t[float] = (3 / 4, 4 / 3)
-    scale_z_p: float = 0.3
-    scale_xy: tuple2_t[float]
+    scale_z_p: float = 0.25
+    scale_xy: tuple2_t[float] = (0.75, 2)
     scale_xy_p: float = 0.5
     flip_p: float = 0.5
     scale_intensity: float = 0.25
@@ -44,60 +44,50 @@ class TransformConf:
     shift_intensity_p: float = 0.
     adjust_contrast: tuple2_t[float] = (0.75, 1.25)
     adjust_contrast_p: float = 0.15
-    gamma: tuple2_t[float] = (0.7, 1.5)
-    gamma_p: float = 0.3
 
-def gen_trans_info(
-    data: dict,
-    token_xy: int,
-    scale_xy_p: float,
-    scale_xy_range: tuple2_t[float],
-    token_z: int,
-    scale_z_p: float,
-    scale_z_range: tuple2_t[float],
-    R: np.random.RandomState,
-) -> dict:
-    """
-    generate scale & patch size according to aniso_d
-    Args:
-        data:
-        token_xy: number of tokens along axis x/y
-        scale_xy_p:
-        scale_xy_range:
-        token_z:
-        scale_z_p:
-        scale_z_range:
-        R:
-    """
+    @dataclass
+    class GammaCorrection:
+        prob: float = 0.3
+        range: tuple2_t[float] = (0.7, 1.5)
+        prob_invert: float = 0.75
+        retain_stats: bool = True
+    gamma_correction: GammaCorrection = field(default_factory=GammaCorrection)
+
+def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomState) -> dict:
     shape = np.array(data['shape'])
     origin_size_xy = shape[1:].min().item()
     spacing = data['spacing']
     spacing_z = spacing[0]
-    spacing_xy = min(spacing[1:])
+    spacing_xy = spacing[1:].min()
 
     # down_i: how much to downsample along axis i
-    down_xy = 1 << 4
-    # token_xy = trans_conf.train_token_xy
-    size_xy = token_xy * down_xy
-    if R.uniform() < scale_xy_p:
-        scale_xy = R.uniform(scale_xy_range[0], min(origin_size_xy / size_xy, scale_xy_range[1]))
+    if R.uniform() < trans_conf.scale_xy_p:
+        scale_xy = R.uniform(
+            trans_conf.scale_xy[0],
+            min(origin_size_xy / trans_conf.size_xy, trans_conf.scale_xy[1]),
+        )
     else:
         scale_xy = 1.
+    size_xy = trans_conf.size_xy
 
-    if spacing_z <= 3 * spacing_xy and R.uniform() < scale_z_p:
-        scale_z = R.uniform(*scale_z_range)
+    if spacing_z <= 3 * spacing_xy and R.uniform() < trans_conf.scale_z_p:
+        scale_z = R.uniform(*trans_conf.scale_z)
     else:
         scale_z = 1.
     # ratio of spacing z / spacing x after scaling
-    rz = np.clip(spacing_z * scale_z / (spacing_xy * scale_xy), 1, down_xy << 1)
-    aniso_d = int(rz).bit_length() - 1
-    down_z = max(down_xy >> aniso_d, 1)
-    token_z = 1 if (1 << aniso_d > down_xy) else token_z
+    ratio = np.clip(spacing_z * scale_z / (spacing_xy * scale_xy), 1, 1 << 6)
+    aniso_d = int(ratio).bit_length() - 1
+    if aniso_d == 6:
+        # extremely anisotropic data, then treat it as 2D
+        size_z = 1
+    else:
+        # make sure base_size_z is not smaller than 32
+        size_z = trans_conf.base_size_z >> aniso_d
 
     return {
         'aniso_d': aniso_d,
         'scale': np.array((scale_z, scale_xy, scale_xy)),
-        'size': np.array((token_z * down_z, size_xy, size_xy)),
+        'size': np.array((size_z, size_xy, size_xy)),
     }
 
 class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
@@ -137,14 +127,9 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
         num_skipped_batches = 0
         trans_conf = self.trans_conf
         while remain_batches > 0:
-            for i in self.weight.multinomial(self.buffer_size).tolist():
+            for i in self.weight.multinomial(self.buffer_size, replacement=True).tolist():
                 data = self.data[i]
-                trans_info = gen_trans_info(
-                    data, trans_conf.stride,
-                    trans_conf.token_xy, trans_conf.scale_xy_p, trans_conf.scale_xy,
-                    trans_conf.scale_z_p, trans_conf.scale_z,
-                    self.R,
-                )
+                trans_info = gen_trans_info(data, trans_conf, self.R)
                 bucket.setdefault(aniso_d := trans_info['aniso_d'], []).append((i, trans_info))
                 if len(batch := bucket[aniso_d]) == self.batch_size:
                     if next_rank == self.rank:
@@ -219,30 +204,24 @@ class PUMITDataModule(LightningDataModule):
     def train_transform(self) -> Callable:
         # TODO: also enable skipping the transform deterministically?
         # note: intensity range is [0, 1] before and after transform
-        trans_conf = self.trans_conf
+        conf = self.trans_conf
         return mt.Compose(
             [
-                lt.RandomizableLoadImageD(
-                    DataKey.IMG,
-                    PUMITReader(int(1.5 * trans_conf.token_z * trans_conf.stride)),
-                    image_only=True,
-                ),
-                mt.ToDeviceD(DataKey.IMG, self.device),
-                UpdateSpacingD(),
-                RandAffineCropD(trans_conf.rotate_p, trans_conf.isotropic_th),
-                *[
-                    mt.RandFlipD(DataKey.IMG, prob=trans_conf.flip_p, spatial_axis=i)
-                    for i in range(3)
-                ],
-                mt.RandScaleIntensityD(DataKey.IMG, trans_conf.scale_intensity, trans_conf.scale_intensity_p),
-                mt.RandShiftIntensityD(DataKey.IMG, trans_conf.shift_intensity, prob=trans_conf.shift_intensity_p),
+                PUMITLoader(conf.rotate_p, self.device),
+                mt.RandScaleIntensityD(DataKey.IMG, conf.scale_intensity, conf.scale_intensity_p),
+                mt.RandShiftIntensityD(DataKey.IMG, conf.shift_intensity, prob=conf.shift_intensity_p),
                 lt.ClampIntensityD(DataKey.IMG),
-                lt.RandAdjustContrastD(DataKey.IMG, trans_conf.adjust_contrast, trans_conf.adjust_contrast_p),
-                mt.OneOf([
-                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, False),
-                    lt.RandGammaCorrectionD(DataKey.IMG, trans_conf.gamma_p, trans_conf.gamma, True),
-                ]),
-                AsSpatialTensorD(),
+                lt.RandAdjustContrastD(DataKey.IMG, conf.adjust_contrast, conf.adjust_contrast_p),
+                lt.RandDictWrapper(
+                    'img',
+                    lt.RandGammaCorrection(
+                        conf.gamma_correction.prob,
+                        conf.gamma_correction.range,
+                        conf.gamma_correction.prob_invert,
+                        conf.gamma_correction.retain_stats,
+                    ),
+                ),
+                InputTransformD(),
             ],
             lazy=True,
         )
