@@ -7,11 +7,11 @@ init_args:
       embedding_dim: 512
       prune: 8
   in_channels: 3
-  encoder_layer_channels: [128, 256, 512]
+  encoder_layer_channels: [96, 192, 384]
   encoder_layer_depths: [2, 2, 6]
-  encoder_layer_num_heads: [4, 8, 16]
+  encoder_layer_num_heads: [3, 6, 12]
   encoder_output_channels: 512
-  decoder_layer_channels: [128, 256, 512]
+  decoder_layer_channels: [96, 192, 384]
   decoder_layer_depths: [2, 2, 2]
-  decoder_layer_num_heads: [4, 8, 16]
+  decoder_layer_num_heads: [3, 6, 12]
   grad_ckpt: false
