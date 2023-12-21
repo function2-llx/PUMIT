@@ -1,5 +1,5 @@
-quant_weight: 1.
-entropy_weight: 0.2
+quant_weight: 1
+entropy_weight: 0
 rec_loss: l1
 rec_weight: 1
 perceptual_loss:

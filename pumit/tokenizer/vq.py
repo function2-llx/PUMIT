@@ -15,7 +15,7 @@ class VectorQuantizerOutput:
     """codebook index, can be a discrete one or soft one (categorical distribution over codebook)"""
     loss: torch.Tensor
     """quantization loss (e.g., |z_q - e|, or prior distribution regularization)"""
-    diversity: float
+    util_var: float
     """evaluate if the utilization of the codebook is "uniform" enough"""
     logits: torch.Tensor | None = None
     """original logits over the codebook for probabilistic VQ"""
@@ -49,16 +49,16 @@ class VectorQuantizer(nn.Module):
             state_dict[proj_weight_key] = weight
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def cal_diversity(self, index: torch.Tensor):
-        bias_correction = self.num_embeddings
-        if index.ndim == 4:
-            # discrete
-            raise NotImplementedError
-        else:
-            # probabilistic
-            p = einops.reduce(index, '... n_e -> n_e', 'mean')
-            var = p.var(unbiased=False)
-        return var * bias_correction
+    # def cal_diversity(self, index: torch.Tensor):
+    #     bias_correction = self.num_embeddings
+    #     if index.ndim == 4:
+    #         # discrete
+    #         raise NotImplementedError
+    #     else:
+    #         # probabilistic
+    #         p = einops.reduce(index, '... n_e -> n_e', 'mean')
+    #         var = p.var(unbiased=False)
+    #     return var * bias_correction
 
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None) -> VectorQuantizerOutput:
         """
@@ -113,11 +113,11 @@ class ProbabilisticVQ(VectorQuantizer):
         self.pdr_eps = pdr_eps
 
     def get_pdr_loss(self, probs: torch.Tensor, fabric: Fabric | None):
-        """prior distribution regularization"""
+        """calculate prior distribution regularization and util_var"""
         mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
         if fabric is not None and fabric.world_size > 1:
             mean_probs = fabric.all_reduce(mean_probs) - mean_probs.detach() + mean_probs
-        return (mean_probs * (mean_probs + self.pdr_eps).log()).sum()
+        return (mean_probs * (mean_probs + self.pdr_eps).log()).sum(), mean_probs.var(unbiased=False)
 
     def embed_index(self, index_probs: torch.Tensor):
         z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')
@@ -151,13 +151,13 @@ class GumbelVQ(ProbabilisticVQ):
 
     def forward(self, z: torch.Tensor, fabric: Fabric | None = None):
         logits, probs, entropy = self.project_over_codebook(z)
-        loss = self.get_pdr_loss(probs, fabric)
+        loss, util_var = self.get_pdr_loss(probs, fabric)
         if self.training:
             index_probs = nnf.gumbel_softmax(logits, self.temperature, self.hard_gumbel, dim=-1)
         else:
             index_probs = probs
         z_q = self.embed_index(index_probs)
-        return VectorQuantizerOutput(z_q, index_probs, loss, self.cal_diversity(index_probs), logits, entropy)
+        return VectorQuantizerOutput(z_q, index_probs, loss, util_var, logits, entropy)
 
 class SoftVQ(ProbabilisticVQ):
     def __init__(self, num_embeddings: int, embedding_dim: int, in_channels: int | None = None, prune: int | None = 3):
@@ -175,6 +175,6 @@ class SoftVQ(ProbabilisticVQ):
                 index_probs = torch.zeros_like(logits)
                 index_probs.scatter_(-1, top_indices, top_logits.softmax(dim=-1))
             index_probs = index_probs + probs - probs.detach()
-        loss = self.get_pdr_loss(index_probs, fabric)
+        loss, util_var = self.get_pdr_loss(index_probs, fabric)
         z_q = self.embed_index(index_probs)
-        return VectorQuantizerOutput(z_q, index_probs, loss, self.cal_diversity(index_probs), logits, entropy)
+        return VectorQuantizerOutput(z_q, index_probs, loss, util_var, logits, entropy)

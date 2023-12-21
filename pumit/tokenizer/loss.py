@@ -126,13 +126,13 @@ class VQVTLoss(nn.Module):
             'rec_loss': rec_loss,
             'perceptual_loss': perceptual_loss,
             'quant_loss': vq_out.loss,
+            'util_var': vq_out.util_var,
             'vq_loss': vq_loss,
             'gan_loss': gan_loss,
             'gan_weight': gan_weight,
         }
         if vq_out.entropy is not None:
             log_dict['entropy'] = vq_out.entropy
-            log_dict['diversity'] = vq_out.diversity
         return loss, log_dict
 
     def disc_fix_rgb(self, x: torch.Tensor, not_rgb: torch.Tensor):
