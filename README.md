@@ -2,7 +2,7 @@
 
 This is the code repository for the paper _Pre-trained Universal Medical Image Transformer_ ([arxiv](https://arxiv.org/abs/2312.07630))
 
-This repository keeps updating for further work. You may want to switch to the `submit` branch to reproduce the results from the paper, note that submodules need checkout as well.
+This repository keeps updating for further work. You may want to switch to the `submit` branch to reproduce the results from the paper, note that submodules need checkout as well. Pre-trained model weights can be found in the [release page](https://github.com/function2-llx/PUMIT/releases/tag/v1).
 
 ## Create Environment
 
