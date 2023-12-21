@@ -98,6 +98,7 @@ class Timer:
 
 def main():
     torch.set_float32_matmul_precision('high')
+    torch.multiprocessing.set_start_method('spawn')
     parser = get_parser()
     raw_args = parser.parse_args()
     args = parser.instantiate_classes(raw_args)

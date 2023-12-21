@@ -80,7 +80,8 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         load_slice = get_random_patch(
             data['shape'], np.minimum(data['shape'], load_size), self.R,
         )
-        img = np.load(data['img'], 'r')
+        img_path = data['img']
+        img = np.load(img_path, 'r')
         img = torch.tensor(img[:, *load_slice], device=self.device)
         # create affine with translation
         affine_t = np.eye(4)
@@ -99,8 +100,7 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         )
         patch_trans.set_random_state(state=self.R)
         patch = patch_trans(img)
-        patch = convert_to_tensor(patch, track_meta=True)
-        patch.meta[ImageMetaKey.FILENAME_OR_OBJ] = data['img']
+        patch.meta[ImageMetaKey.FILENAME_OR_OBJ] = img_path
         data['img'] = patch
         return data
 
