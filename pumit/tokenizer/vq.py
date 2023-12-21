@@ -116,8 +116,10 @@ class ProbabilisticVQ(VectorQuantizer):
         """calculate prior distribution regularization and util_var"""
         mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
         if fabric is not None and fabric.world_size > 1:
-            mean_probs = fabric.all_reduce(mean_probs) - mean_probs.detach() + mean_probs
-        return (mean_probs * (mean_probs + self.pdr_eps).log()).sum(), mean_probs.var(unbiased=False)
+            detached = mean_probs.detach()
+            # note: don't change the calculation order as fabric.all_reduce modifies in-place
+            mean_probs = mean_probs - detached + fabric.all_reduce(detached)
+        return (mean_probs * (mean_probs + self.pdr_eps).log()).sum(), mean_probs.var(unbiased=False) * self.num_embeddings
 
     def embed_index(self, index_probs: torch.Tensor):
         z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')
@@ -172,8 +174,10 @@ class SoftVQ(ProbabilisticVQ):
         else:
             with torch.no_grad():
                 top_logits, top_indices = torch.topk(logits, self.prune, dim=-1)
-                index_probs = torch.zeros_like(logits)
-                index_probs.scatter_(-1, top_indices, top_logits.softmax(dim=-1))
+                # write additional lines for autocast to work
+                top_probs = top_logits.softmax(dim=-1)
+                index_probs = torch.zeros_like(logits, dtype=top_probs.dtype)
+                index_probs.scatter_(-1, top_indices, top_probs)
             index_probs = index_probs + probs - probs.detach()
         loss, util_var = self.get_pdr_loss(index_probs, fabric)
         z_q = self.embed_index(index_probs)

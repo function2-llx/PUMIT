@@ -67,7 +67,7 @@ class SwinVQVT(VQVisualTokenizer):
 
         self.decoder = nn.Sequential(
             nn.Linear(self.quantize.embedding_dim, decoder_layer_channels[-1]),
-            nn.LayerNorm(encoder_layer_channels[-1]),
+            nn.LayerNorm(decoder_layer_channels[-1]),
             nn.GELU(),
             ChannelFirst(),
         )

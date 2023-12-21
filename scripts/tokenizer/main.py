@@ -185,7 +185,7 @@ def main():
         x = spadop.SpatialTensor(x, aniso_d)
         if isinstance(model.quantize, GumbelVQ):
             model.quantize.adjust_temperature(step, training_args.max_steps)
-        x_rec, vq_out = model.autoencode(x, fabric)
+        x_rec, vq_out = model(x, autoencode=True, fabric=fabric)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
             x, x_rec, not_rgb, vq_out,

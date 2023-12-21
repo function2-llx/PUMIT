@@ -5,7 +5,7 @@ init_args:
     init_args:
       num_embeddings: 1024
       embedding_dim: 512
-      prune: 3
+      prune: 8
   in_channels: 3
   encoder_layer_channels: [128, 256, 512]
   encoder_layer_depths: [2, 2, 6]

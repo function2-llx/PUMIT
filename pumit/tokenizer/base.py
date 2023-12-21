@@ -38,7 +38,9 @@ class VQVisualTokenizer(ABC, nn.Module):
         x_rec = self.decode(vq_out.z_q)
         return x_rec, vq_out
 
-    def forward(self, x: spadop.SpatialTensor) -> VectorQuantizerOutput:
+    def forward(self, x: spadop.SpatialTensor, *, autoencode: bool = False, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, VectorQuantizerOutput] | VectorQuantizerOutput:
+        if autoencode:
+            return self.autoencode(x, fabric)
         z = self.encode(x)
         vq_out: VectorQuantizerOutput = self.quantize(z)
         return vq_out
