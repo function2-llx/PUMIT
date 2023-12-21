@@ -5,11 +5,12 @@ from lightning import Fabric
 import torch
 from torch import nn
 
+from luolib.losses import SlicePerceptualLoss
 from luolib.models import spadop
 
+from pumit.transforms import rgb_to_gray
 from .discriminator import PatchDiscriminatorBase
-from .lpips import LPIPS
-from .quantize import VectorQuantizerOutput
+from .vq import VectorQuantizerOutput
 
 @torch.no_grad()
 def calculate_adaptive_weight(
@@ -39,11 +40,11 @@ class VQVTLoss(nn.Module):
         self,
         quant_weight: float,
         entropy_weight: float,
+        rec_loss: Literal['l1', 'l2'],
+        rec_weight: float,
+        perceptual_loss: SlicePerceptualLoss,
+        perceptual_weight: float,
         discriminator: PatchDiscriminatorBase,
-        rec_loss: Literal['l1', 'l2'] = 'l1',
-        rec_weight: float = 1.0,
-        perceptual_weight: float = 1.0,
-        max_perceptual_slices: int = 16,
         gan_weight: float = 1.0,
         adaptive_gan_weight: bool = False,
     ):
@@ -58,15 +59,14 @@ class VQVTLoss(nn.Module):
                 self.rec_loss = nn.MSELoss()
             case _:
                 raise ValueError
-        self.perceptual_loss = LPIPS()
-        print(f'{self.__class__.__name__}: running with LPIPS')
+        self.perceptual_loss = perceptual_loss
+        print(f'{self.__class__}: running with {self.perceptual_loss.__class__}, function={self.perceptual_loss.perceptual_function.__class__}')
         self.perceptual_weight = perceptual_weight
-        self.max_perceptual_slices = max_perceptual_slices
         self.gan_weight = gan_weight
         self.adaptive_gan_weight = adaptive_gan_weight
         assert discriminator is not None
         self.discriminator = discriminator
-        print(f'{self.__class__.__name__}: running with hinge W-GAN loss')
+        print(f'{self.__class__}: running with hinge W-GAN loss')
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):
@@ -94,35 +94,20 @@ class VQVTLoss(nn.Module):
         self,
         x: spadop.SpatialTensor,
         x_rec: spadop.SpatialTensor,
+        not_rgb: torch.Tensor,
         vq_out: VectorQuantizerOutput,
         use_gan_loss: bool,
         ref_param: nn.Parameter | None = None,
         fabric: Fabric | None = None,
     ) -> tuple[torch.Tensor, dict]:
         rec_loss = self.rec_loss(x, x_rec)
-        if self.perceptual_weight > 0:
-            if self.training and x.shape[2] > self.max_perceptual_slices:
-                slice_indexes = einops.repeat(
-                    x.new_ones(x.shape[0], x.shape[2]).multinomial(self.max_perceptual_slices),
-                    'n d -> n c d h w', c=x.shape[1], h=x.shape[3], w=x.shape[4],
-                )
-                sampled_x = x.gather(dim=2, index=slice_indexes)
-                sampled_x_rec = x_rec.gather(dim=2, index=slice_indexes)
-            else:
-                sampled_x = x
-                sampled_x_rec = x_rec
-            perceptual_loss = self.perceptual_loss(
-                einops.rearrange(sampled_x, 'n c d h w -> (n d) c h w'),
-                einops.rearrange(sampled_x_rec, 'n c d h w -> (n d) c h w'),
-            )
-        else:
-            perceptual_loss = torch.zeros_like(rec_loss)
+        perceptual_loss = self.perceptual_loss(x_rec, x)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * vq_out.loss
         if vq_out.entropy is not None:
             vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
 
         # always calculate GAN loss since it will be used elsewhere
-        score_fake = self.discriminator(x_rec)
+        score_fake = self.disc_fix_rgb(x_rec, not_rgb)
         gan_loss = -score_fake.mean()
         if use_gan_loss:
             gan_weight = self.gan_weight
@@ -150,9 +135,26 @@ class VQVTLoss(nn.Module):
             log_dict['diversity'] = vq_out.diversity
         return loss, log_dict
 
-    def forward_disc(self, x: spadop.SpatialTensor, x_rec: spadop.SpatialTensor, log_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict]:
-        score_real = self.discriminator(x.detach())
-        score_fake = self.discriminator(x_rec.detach())
+    def disc_fix_rgb(self, x: torch.Tensor, not_rgb: torch.Tensor):
+        if not_rgb.any():
+            fixed = x.clone()
+            fixed[not_rgb] = einops.repeat(
+                rgb_to_gray(x[not_rgb], True),
+                'n 1 ... -> n c ...', c=3,
+            )
+        else:
+            fixed = x
+        return self.discriminator(fixed)
+
+    def forward_disc(
+        self,
+        x: spadop.SpatialTensor,
+        x_rec: spadop.SpatialTensor,
+        not_rgb: torch.Tensor,
+        log_dict: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict]:
+        score_real = self.disc_fix_rgb(x.detach(), not_rgb)
+        score_fake = self.disc_fix_rgb(x_rec.detach(), not_rgb)
         disc_loss = 0.5 * hinge_loss(score_real, score_fake)
         log_dict['disc_loss'] = disc_loss
         return disc_loss, log_dict

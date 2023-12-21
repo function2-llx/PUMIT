@@ -1,0 +1,19 @@
+dataloader:
+  train_batch_size: 4
+transform:
+  base_size_z: 128
+  size_xy: 128
+  rotate:
+    prob: 0.3
+    axis_prob: 0.25
+  scale_z:
+  - 0.75
+  - ${eval:"4 / 3"}
+  scale_z_p: 0.25
+  scale_xy: [0.75, 2]
+  scale_xy_p: 0.5
+  scale_intensity: 0.25
+  scale_intensity_p: 0.15
+  shift_intensity: 0.1
+  shift_intensity_p: 0.15
+seed: 42

@@ -12,8 +12,8 @@ class InputTransformD(mt.Transform):
     def __call__(self, data: Mapping[Hashable, ...]) -> tuple[torch.Tensor, bool, int, Path]:
         """the image data returned here has range of [0, 1]"""
         img: MetaTensor = data['img']
-        img_t, is_rgb = ensure_rgb(img)
-        return img_t, is_rgb, data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
+        img_t, not_rgb = ensure_rgb(img)
+        return img_t, not_rgb, data['_trans']['aniso_d'], img.meta[ImageMetaKey.FILENAME_OR_OBJ]
 
 class AdaptivePadD(mt.Transform):
     def __call__(self, data: Mapping):

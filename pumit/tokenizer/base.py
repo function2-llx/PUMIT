@@ -11,12 +11,12 @@ from torch import nn
 from luolib.models import spadop
 from luolib.models.utils import load_ckpt
 
-from .quantize import VectorQuantizer, VectorQuantizerOutput
+from .vq import VectorQuantizer, VectorQuantizerOutput
 
 class VQVisualTokenizer(ABC, nn.Module):
     is_pretrained: bool = False
 
-    def __init__(self, quantize: VectorQuantizer, *args, **kwargs):
+    def __init__(self, *args, quantize: VectorQuantizer, **kwargs):
         super().__init__(*args, **kwargs)
         self.quantize = quantize
 

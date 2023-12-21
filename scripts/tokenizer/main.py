@@ -1,13 +1,11 @@
 from dataclasses import dataclass
 import math
 from pathlib import Path
-from typing import cast
 
 from jsonargparse import ActionConfigFile, ArgumentParser
-from lightning.fabric import Fabric as LightningFabric
+from lightning.fabric import Fabric
 from lightning.pytorch.loggers import WandbLogger
 import torch
-from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
 
@@ -17,23 +15,7 @@ from luolib.models.utils import load_ckpt
 
 from pumit.datamodule import PUMITDataModule
 from pumit.tokenizer import VQVTLoss, VQVisualTokenizer
-from pumit.tokenizer.quantize import GumbelVQ
-
-class Fabric(LightningFabric):
-    # https://github.com/Lightning-AI/lightning/issues/18106
-    def _setup_dataloader(
-        self, dataloader: DataLoader, use_distributed_sampler: bool = True, move_to_device: bool = True
-    ) -> DataLoader:
-        assert use_distributed_sampler is False
-        # add worker_init_fn for correct seeding in worker processes
-        from lightning.fabric.utilities.data import _auto_add_worker_init_fn
-        _auto_add_worker_init_fn(dataloader, self.global_rank)
-
-        dataloader = self._strategy.process_dataloader(dataloader)
-        from lightning.fabric.wrappers import _FabricDataLoader
-        lite_dataloader = _FabricDataLoader(dataloader=dataloader, device=self.device)
-        lite_dataloader = cast(DataLoader, lite_dataloader)
-        return lite_dataloader
+from pumit.tokenizer.vq import GumbelVQ
 
 @dataclass(kw_only=True)
 class TrainingArguments:
@@ -47,7 +29,7 @@ class TrainingArguments:
     max_norm_d: int | float | None = None
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
-    output_dir: Path = Path('output/tokenizer')
+    output_dir: Path
     exp_name: str
     disc_loss_ema_init: float = 0.1
     disc_loss_momentum: float = 0.9
@@ -57,7 +39,7 @@ class TrainingArguments:
     fix_codebook: bool = False
 
 def get_parser():
-    parser = ArgumentParser()
+    parser = ArgumentParser(parser_mode='omegaconf')
     parser.add_argument('-c', '--config', action=ActionConfigFile)
     parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--optim_g', type=list[OptimizationConf], enable_path=True)
@@ -65,7 +47,7 @@ def get_parser():
     parser.add_argument('--optim_d', type=list[OptimizationConf], enable_path=True)
     parser.add_class_arguments(PUMITDataModule, 'data')
     parser.add_dataclass_arguments(TrainingArguments, 'training')
-    parser.link_arguments('training.max_steps', 'data.dl_conf.num_train_batches')
+    parser.link_arguments('training.max_steps', 'data.dataloader.num_train_batches')
     parser.link_arguments('training.seed', 'data.seed')
     return parser
 
@@ -143,7 +125,7 @@ def main():
 
     if fabric.is_global_zero:
         Path(save_dir / 'model.txt').write_text(repr(model))
-        Path(save_dir / 'discriminator.txt').write_text(repr(loss_module.discriminator))
+        Path(save_dir / 'loss.txt').write_text(repr(loss_module))
 
     optimized_steps = 0
     state = {
@@ -189,11 +171,13 @@ def main():
         datamodule.val_dataloader(),
         use_distributed_sampler=False,
     )
+    datamodule.dataset_info.to_csv(save_dir / 'dataset-info.csv')
+    datamodule.dataset_info.to_excel(save_dir / 'dataset-info.xlsx')
 
     metric_dict = MetricDict()
     disc_loss_ema = training_args.disc_loss_ema_init
     disc_loss_item = math.inf
-    for step, (x, aniso_d, paths) in enumerate(
+    for step, (x, not_rgb, aniso_d, paths) in enumerate(
         tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=optimized_steps),
         start=optimized_steps,
     ):
@@ -201,10 +185,10 @@ def main():
         x = spadop.SpatialTensor(x, aniso_d)
         if isinstance(model.quantize, GumbelVQ):
             model.quantize.adjust_temperature(step, training_args.max_steps)
-        x_rec, vq_out = model.forward(x, fabric)
+        x_rec, vq_out = model.autoencode(x, fabric)
         loss_module.discriminator.requires_grad_(False)
         loss, log_dict = loss_module.forward_gen(
-            x, x_rec, vq_out,
+            x, x_rec, not_rgb, vq_out,
             max(disc_loss_ema, disc_loss_item) <= training_args.use_gan_th, model.get_ref_param(),
             fabric,
         )
@@ -212,17 +196,17 @@ def main():
         if training_args.max_norm_g is not None:
             fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
-            lr_scheduler_g.scheduler.step_update(step)
+            lr_scheduler_g.scheduler.step(step)
             fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)
         optimizer_g.step()
         optimizer_g.zero_grad()
         loss_module.discriminator.requires_grad_(True)
-        disc_loss, log_dict = loss_module.forward_disc(x, x_rec, log_dict)
+        disc_loss, log_dict = loss_module.forward_disc(x, x_rec, not_rgb, log_dict)
         fabric.backward(disc_loss)
         if training_args.max_norm_d is not None:
             fabric.clip_gradients(loss_module.discriminator, optimizer_d, max_norm=training_args.max_norm_d)
         if step % lr_scheduler_d.frequency == 0:
-            lr_scheduler_d.scheduler.step_update(step)
+            lr_scheduler_d.scheduler.step(step)
             fabric.log('lr-d', optimizer_d.param_groups[0]['lr'], step)
         optimizer_d.step()
         optimizer_d.zero_grad()

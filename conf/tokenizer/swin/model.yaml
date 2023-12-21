@@ -1,0 +1,17 @@
+class_path: pumit.tokenizer.SwinVQVT
+init_args:
+  quantize:
+    class_path: pumit.tokenizer.vq.SoftVQ
+    init_args:
+      num_embeddings: 1024
+      embedding_dim: 512
+      prune: 3
+  in_channels: 3
+  encoder_layer_channels: [128, 256, 512]
+  encoder_layer_depths: [2, 2, 6]
+  encoder_layer_num_heads: [4, 8, 16]
+  encoder_output_channels: 512
+  decoder_layer_channels: [128, 256, 512]
+  decoder_layer_depths: [2, 2, 2]
+  decoder_layer_num_heads: [4, 8, 16]
+  grad_ckpt: false

@@ -101,7 +101,7 @@ def cal_entropy(probs: torch.Tensor, logits: torch.Tensor):
     return -einops.einsum(probs, log_probs, '... ne, ... ne -> ...').mean()
 
 class ProbabilisticVQ(VectorQuantizer):
-    def __init__(self, num_embeddings: int, embedding_dim: int, in_channels: int | None = None):
+    def __init__(self, num_embeddings: int, embedding_dim: int, in_channels: int | None = None, pdr_eps: float = 1e-6):
         """
         Args:
             in_channels: input feature map channels
@@ -110,15 +110,14 @@ class ProbabilisticVQ(VectorQuantizer):
         in_channels = in_channels or embedding_dim
         # calculate categorical distribution over embeddings
         self.proj = nn.Linear(in_channels, num_embeddings)
+        self.pdr_eps = pdr_eps
 
     def get_pdr_loss(self, probs: torch.Tensor, fabric: Fabric | None):
         """prior distribution regularization"""
         mean_probs = einops.reduce(probs, '... d -> d', reduction='mean')
-        if fabric is not None and self.training:
-            # don't use all_reduce: https://github.com/Lightning-AI/lightning/issues/18228
-            detached = mean_probs.detach()
-            mean_probs = fabric.all_gather(detached).mean(dim=0) - detached + mean_probs
-        return (mean_probs * mean_probs.log()).sum()
+        if fabric is not None and fabric.world_size > 1:
+            mean_probs = fabric.all_reduce(mean_probs) - mean_probs.detach() + mean_probs
+        return (mean_probs * (mean_probs + self.pdr_eps).log()).sum()
 
     def embed_index(self, index_probs: torch.Tensor):
         z_q = einops.einsum(index_probs, self.embedding.weight, '... ne, ne d -> ... d')

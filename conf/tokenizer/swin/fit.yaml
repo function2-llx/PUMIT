@@ -1,0 +1,10 @@
+loss: loss.yaml
+data: data.yaml
+training:
+  exp_name: tokenizer-swin
+  seed: 42
+  disc_loss_momentum: 0.9
+  use_gan_th: 0.025
+  output_dir: output/${.exp_name}
+  plot_image_every_n_steps: 500
+  benchmark: true

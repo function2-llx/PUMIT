@@ -25,6 +25,7 @@ dependencies:
 - itk
 - pydicom
 - gdcm
+- gdown  # RadImageNet downloading
 
 - pip
 - pip:

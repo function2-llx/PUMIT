@@ -1,0 +1,22 @@
+quant_weight: 1.
+entropy_weight: 0.2
+rec_loss: l1
+rec_weight: 1
+perceptual_loss:
+  class_path: luolib.losses.SlicePerceptualLoss
+  init_args:
+    spatial_dims: 3
+    network_type: radimagenet_resnet50
+    is_fake_3d: true
+    max_slices: 24
+perceptual_weight: 1
+discriminator:
+  class_path: pumit.tokenizer.discriminator.SwinPatchDiscriminator
+  init_args:
+    in_channels: 3
+    layer_channels: [128, 256, 512]
+    layer_depths: [2, 2, 6]
+    layer_num_heads: [4, 8, 16]
+    grad_ckpt: false
+gan_weight: 3e-3
+adaptive_gan_weight: false

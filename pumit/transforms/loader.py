@@ -6,7 +6,7 @@ from torch.types import Device
 
 from monai import transforms as mt
 from monai.data import get_random_patch
-from monai.utils import GridSampleMode, GridSamplePadMode
+from monai.utils import GridSampleMode, GridSamplePadMode, ImageMetaKey, convert_to_tensor
 
 def get_rotation_matrix(axis: Sequence[float], θ: float) -> np.ndarray:
     cos = np.cos(θ)
@@ -32,15 +32,16 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
     This loader calculates affine transform before loading, then read content necessary and as little as possible from the disk
     """
 
-    def __init__(self, rotate_p: float, device: Device = 'cpu'):
+    def __init__(self, rotate_p: float, rotate_axis_p: float, device: Device = 'cpu'):
         self.rotate_p = rotate_p
+        self.rotate_axis_p = rotate_axis_p
         self.device = device
 
     def get_rotation(self, spacing: np.ndarray):
         if self.R.uniform() >= self.rotate_p:
             return None, None
         spacing_xy = spacing[1:].min()
-        if spacing[0] < 3 * spacing_xy:
+        if spacing[0] < 3 * spacing_xy and self.R.uniform() < self.rotate_axis_p:
             # 3D rotation with restricted axis closing to z-axis
             axis_φ = self.R.uniform(7 * np.pi / 15, np.pi / 2)
         else:
@@ -54,6 +55,7 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         return axis, θ
 
     def __call__(self, data: dict):
+        data = dict(data)
         trans_info = data['_trans']
         spacing = data['spacing']
         spacing_xy = spacing[1:].min()
@@ -97,7 +99,10 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         )
         patch_trans.set_random_state(state=self.R)
         patch = patch_trans(img)
-        return patch
+        patch = convert_to_tensor(patch, track_meta=True)
+        patch.meta[ImageMetaKey.FILENAME_OR_OBJ] = data['img']
+        data['img'] = patch
+        return data
 
 if __name__ == '__main__':
     R = get_rotation_matrix(np.array((1, 0, 0)), np.pi / 3)

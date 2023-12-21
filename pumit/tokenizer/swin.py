@@ -26,6 +26,20 @@ class SwinVQVT(VQVisualTokenizer):
         *args,
         **kwargs,
     ):
+        """
+        Args:
+            in_channels:
+            encoder_layer_channels:
+            encoder_layer_depths:
+            encoder_layer_num_heads:
+            encoder_output_channels: map the feature map channels to this number with an MLP as the input of VQ module
+            decoder_layer_channels:
+            decoder_layer_depths:
+            decoder_layer_num_heads:
+            grad_ckpt:
+            *args:
+            **kwargs:
+        """
         super().__init__(*args, **kwargs)
         encoder_num_layers = len(encoder_layer_channels)
         decoder_num_layers = len(encoder_layer_channels)

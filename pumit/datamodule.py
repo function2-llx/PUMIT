@@ -33,7 +33,13 @@ class TransformConf:
     # spatial
     base_size_z: int = 128
     size_xy: int = 128
-    rotate_p: float = 0.25
+
+    @dataclass
+    class Rotate:
+        prob: float = 0.3
+        axis_prob: float = 0.2
+    rotate: Rotate = field(default_factory=Rotate)
+
     scale_z: tuple2_t[float] = (3 / 4, 4 / 3)
     scale_z_p: float = 0.25
     scale_xy: tuple2_t[float] = (0.75, 2)
@@ -162,9 +168,8 @@ class PUMITDataset(TorchDataset):
 class PUMITDataModule(LightningDataModule):
     def __init__(
         self,
-        # dataset_weights: dict[str, float],
-        dl_conf: DataLoaderConf,
-        trans_conf: TransformConf,
+        dataloader: DataLoaderConf,
+        transform: TransformConf,
         seed: int | None = 42,
         device: Literal['cpu', 'cuda'] = 'cpu',
     ):
@@ -172,7 +177,6 @@ class PUMITDataModule(LightningDataModule):
         self.train_data = pd.DataFrame()
         self.val_data = pd.DataFrame()
         self.R = np.random.RandomState(seed)
-        # dataset_names = []
         dataset_info = {}
         for dataset_dir in DATA_ROOT.iterdir():
             dataset_name = dataset_dir.name
@@ -181,9 +185,9 @@ class PUMITDataModule(LightningDataModule):
                 is_2d = (meta['shape'].map(lambda shape: shape[0]).to_numpy() == 1).all()
                 dataset_info[dataset_name] = {
                     'dims': 2 if is_2d else 3,
-                    # take sqrt to balance between datasets
                     'weights': (weights := meta['weight'].sum()),
-                    'sqrt-weights': weights.sqrt(),
+                    # take sqrt to balance between datasets
+                    'sqrt-weights': np.sqrt(weights),
                 }
             else:
                 print(f'skip {dataset_name}')
@@ -196,19 +200,20 @@ class PUMITDataModule(LightningDataModule):
         for dataset_name in dataset_info.index:
             dataset_dir = DATA_ROOT / dataset_name
             meta: pd.DataFrame = pd.read_pickle(dataset_dir / 'meta.pkl')
-            dataset_weight_scale = 1 / dataset_info[dataset_name]['weights']
-            if dataset_info[dataset_name]['dims'] == 3:
+            dataset_weight_scale = 1 / dataset_info.loc[dataset_name, 'sqrt-weights']
+            if dataset_info.loc[dataset_name, 'dims'] == 3:
                 dataset_weight_scale *= weights_ratio
-            dataset_info['scale'] = dataset_weight_scale
+            dataset_info.loc[dataset_name, 'scale'] = dataset_weight_scale
             meta['weight'] *= dataset_weight_scale
-            meta['img'] = meta['key'].map(lambda key: dataset_dir / 'data' / f'{key}.npy')
+            meta['img'] = meta.index.map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
                 sub_meta = meta[meta['modality'] == modality]
                 val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)
                 self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
                 self.val_data = pd.concat([self.val_data, val_sample])
-        self.dl_conf = dl_conf
-        self.trans_conf = trans_conf
+        self.dataset_info = dataset_info
+        self.dl_conf = dataloader
+        self.trans_conf = transform
         self.device = torch.device(device)
 
     def setup_ddp(self, local_rank: int, global_rank: int, world_size: int):
@@ -227,7 +232,7 @@ class PUMITDataModule(LightningDataModule):
         conf = self.trans_conf
         return mt.Compose(
             [
-                PUMITLoader(conf.rotate_p, self.device),
+                PUMITLoader(conf.rotate.prob, conf.rotate.axis_prob, self.device),
                 mt.RandScaleIntensityD('img', conf.scale_intensity, prob=conf.scale_intensity_p, channel_wise=True),
                 mt.RandShiftIntensityD('img', conf.shift_intensity, prob=conf.shift_intensity_p, channel_wise=True),
                 lt.RandDictWrapper(
@@ -254,10 +259,10 @@ class PUMITDataModule(LightningDataModule):
         )
 
     @staticmethod
-    def collate_fn(batch: list[tuple[torch.Tensor, int, PathLike]]):
-        tensor_list, [aniso_d, *aniso_d_list], *info = zip(*batch)
-        assert (np.array(aniso_d_list) == aniso_d).all()
-        return torch.stack(tensor_list), aniso_d, *info
+    def collate_fn(batch: list[tuple[torch.Tensor, bool, int, PathLike]]):
+        tensor_list, not_rgb, [aniso_d, *aniso_d_list], *info = zip(*batch)
+        assert all(aniso_d == other for other in aniso_d_list)
+        return torch.stack(tensor_list), torch.tensor(not_rgb), aniso_d, *info
 
     def train_dataloader(self, num_skip_batches: int = 0):
         conf = self.dl_conf
@@ -279,7 +284,7 @@ class PUMITDataModule(LightningDataModule):
     def val_transform(self) -> Callable:
         return mt.Compose([
             mt.LoadImageD('img', PUMITReader, image_only=True),
-            mt.CropForegroundD('img', 'img'),
+            mt.CropForegroundD('img', 'img', allow_smaller=True),
             AdaptivePadD(),
         ])
 
