@@ -22,7 +22,7 @@ from pumit.tokenizer.vq import GumbelVQ
 class TrainingArguments:
     max_steps: int
     seed: int = 42
-    log_every_n_steps: int = 50
+    log_every_n_steps: int = 20
     save_last_every_n_steps: int = 1000
     plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000
@@ -76,8 +76,12 @@ class MetricDict(dict):
 
 def log_dict_split(fabric: Fabric, split: str, metric_dict: MetricDict, step: int | None = None):
     metric_dict = fabric.all_reduce(metric_dict.reduce())
+    if split == '':
+        prefix = ''
+    else:
+        prefix = f'{split}/'
     metric_dict = {
-        f'{split}/{k}': v
+        f'{prefix}{k}': v
         for k, v in metric_dict.items()
     }
     fabric.log_dict(metric_dict, step)
@@ -126,7 +130,7 @@ def main():
     if fabric.is_global_zero:
         save_dir.mkdir(parents=True)
         ckpt_save_dir.mkdir()
-        parser.save(raw_args, save_dir / 'conf.yaml', multifile=False)
+        parser.save(raw_args, save_dir / 'conf.yaml', multifile=False, skip_none=False)
 
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = training_args.benchmark
@@ -187,10 +191,11 @@ def main():
     datamodule.dataset_info.to_excel(save_dir / 'dataset-info.xlsx')
 
     metric_dict = MetricDict()
+    grad_norm_dict = MetricDict()
     disc_loss_ema = training_args.disc_loss_ema_init
     disc_loss_item = math.inf
     for step, batch in enumerate(
-        tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=optimized_steps),
+        tqdm(train_loader, desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0, initial=optimized_steps),
         start=optimized_steps,
     ):
         x, not_rgb, aniso_d, paths = batch
@@ -209,7 +214,7 @@ def main():
         check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
         # calling this will unscale the gradients as well
         fabric.clip_gradients(model, optimizer_g, 1)
-        fabric.log('grad-norm-g', grad_norm(model), step)
+        grad_norm_g = grad_norm(model)
         # if training_args.max_norm_g is not None:
         #     fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
@@ -222,7 +227,7 @@ def main():
         fabric.backward(disc_loss)
         check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
         fabric.clip_gradients(loss_module.discriminator, optimizer_d, 1)
-        fabric.log('grad-norm-d', grad_norm(loss_module.discriminator), step)
+        grad_norm_d = grad_norm(loss_module.discriminator)
         # if training_args.max_norm_d is not None:
         #     fabric.clip_gradients(loss_module.discriminator, optimizer_d, max_norm=training_args.max_norm_d)
         if step % lr_scheduler_d.frequency == 0:
@@ -236,9 +241,11 @@ def main():
         log_dict['disc_loss'] = disc_loss
         log_dict['disc_loss_ema'] = disc_loss_ema
         metric_dict.update_metrics(log_dict)
+        grad_norm_dict.update_metrics({'gen': grad_norm_g, 'disc': grad_norm_d})
         optimized_steps = step + 1
         if optimized_steps % training_args.log_every_n_steps == 0 or optimized_steps == training_args.max_steps:
             log_dict_split(fabric, 'train', metric_dict, optimized_steps)
+            log_dict_split(fabric, 'grad-norm', grad_norm_dict, optimized_steps)
             if isinstance(model.quantize, GumbelVQ):
                 fabric.log('train/temperature', model.quantize.temperature, optimized_steps)
         if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:

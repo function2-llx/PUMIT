@@ -27,6 +27,7 @@ class DataLoaderConf:
     val_batch_size: int = 1  # default=1, or help me write another distributed batch sampler for validation
     num_train_batches: int | None = None
     num_workers: int = 8
+    prefetch_factor: int | None = 32
 
 @dataclass(kw_only=True)
 class TransformConf:
@@ -275,7 +276,7 @@ class PUMITDataModule(LightningDataModule):
                 data, conf.num_train_batches, num_skip_batches, self.trans_conf,
                 self.world_size, self.global_rank, self.R, conf.train_batch_size, weight,
             ),
-            prefetch_factor=8 if conf.num_workers > 0 else None,
+            prefetch_factor=conf.prefetch_factor if conf.num_workers > 0 else None,
             collate_fn=self.collate_fn,
             pin_memory=self.device.type == 'cpu',
             persistent_workers=conf.num_workers > 0,
