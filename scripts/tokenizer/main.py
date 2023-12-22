@@ -12,6 +12,7 @@ from tqdm import tqdm
 from luolib.lightning import OptimizationConf, build_hybrid_optimization
 from luolib.models import spadop
 from luolib.models.utils import load_ckpt
+from luolib.utils.grad import grad_norm
 
 from pumit.datamodule import PUMITDataModule
 from pumit.tokenizer import VQVTLoss, VQVisualTokenizer
@@ -25,8 +26,8 @@ class TrainingArguments:
     save_last_every_n_steps: int = 1000
     plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000
-    max_norm_g: int | float | None = None
-    max_norm_d: int | float | None = None
+    max_norm_g: float | None = None
+    max_norm_d: float | None = None
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
     output_dir: Path
@@ -95,6 +96,13 @@ class Timer:
         elapsed = (t := self.get_time()) - self.t
         self.t = t
         print(f'step {self.step} {info}: {elapsed:.2f} ms')
+
+def check_loss(loss: torch.Tensor, state: dict, batch, save_dir: Path, fabric: Fabric):
+    if loss.isfinite() or save_dir.exists():
+        return
+    save_dir.mkdir(parents=True, exist_ok=True)
+    fabric.save(save_dir / 'checkpoint.ckpt', state)
+    torch.save(batch, save_dir / 'batch.pt')
 
 def main():
     torch.set_float32_matmul_precision('high')
@@ -178,10 +186,11 @@ def main():
     metric_dict = MetricDict()
     disc_loss_ema = training_args.disc_loss_ema_init
     disc_loss_item = math.inf
-    for step, (x, not_rgb, aniso_d, paths) in enumerate(
+    for step, batch in enumerate(
         tqdm(train_loader, desc='training', ncols=80, disable=fabric.local_rank != 0, initial=optimized_steps),
         start=optimized_steps,
     ):
+        x, not_rgb, aniso_d, paths = batch
         x = 2 * x - 1
         x = spadop.SpatialTensor(x, aniso_d)
         if isinstance(model.quantize, GumbelVQ):
@@ -194,6 +203,8 @@ def main():
             fabric,
         )
         fabric.backward(loss)
+        fabric.log('grad-norm-g', grad_norm(model), step)
+        check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
         if training_args.max_norm_g is not None:
             fabric.clip_gradients(model, optimizer_g, max_norm=training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
@@ -204,6 +215,8 @@ def main():
         loss_module.discriminator.requires_grad_(True)
         disc_loss, log_dict = loss_module.forward_disc(x, x_rec, not_rgb, log_dict)
         fabric.backward(disc_loss)
+        fabric.log('grad-norm-d', grad_norm(loss_module.discriminator), step)
+        check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
         if training_args.max_norm_d is not None:
             fabric.clip_gradients(loss_module.discriminator, optimizer_d, max_norm=training_args.max_norm_d)
         if step % lr_scheduler_d.frequency == 0:

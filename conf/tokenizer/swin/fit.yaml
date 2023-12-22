@@ -8,3 +8,5 @@ training:
   output_dir: output/${.exp_name}
   plot_image_every_n_steps: 500
   benchmark: true
+  # max_norm_g: 5
+  # max_norm_d: 5
