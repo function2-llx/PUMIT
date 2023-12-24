@@ -223,8 +223,7 @@ def main():
         fabric.backward(loss)
         check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
         # calling this will unscale the gradients as well
-        fabric.clip_gradients(model, optimizer_g, 1, training_args.max_norm_g)
-        grad_norm_g = grad_norm(model)
+        grad_norm_g = fabric.clip_gradients(model, optimizer_g, 1, training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
             lr_scheduler_g.scheduler.step(step)
             fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)
@@ -234,8 +233,7 @@ def main():
         disc_loss, log_dict = loss_module.forward_disc(x, x_rec, not_rgb, log_dict)
         fabric.backward(disc_loss)
         check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
-        fabric.clip_gradients(loss_module.discriminator, optimizer_d, 1, training_args.max_norm_d)
-        grad_norm_d = grad_norm(loss_module.discriminator)
+        grad_norm_d = fabric.clip_gradients(loss_module.discriminator, optimizer_d, 1, training_args.max_norm_d)
         if step % lr_scheduler_d.frequency == 0:
             lr_scheduler_d.scheduler.step(step)
             fabric.log('lr-d', optimizer_d.param_groups[0]['lr'], step)
