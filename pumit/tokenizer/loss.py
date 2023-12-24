@@ -47,6 +47,7 @@ class VQVTLoss(nn.Module):
         discriminator: PatchDiscriminatorBase,
         gan_weight: float = 1.0,
         adaptive_gan_weight: bool = False,
+        fix_rgb: bool = False,
     ):
         super().__init__()
         self.quant_weight = quant_weight
@@ -67,6 +68,7 @@ class VQVTLoss(nn.Module):
         assert discriminator is not None
         self.discriminator = discriminator
         print(f'{self.__class__}: running with hinge W-GAN loss')
+        self.fix_rgb = fix_rgb
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):
@@ -136,7 +138,7 @@ class VQVTLoss(nn.Module):
         return loss, log_dict
 
     def disc_fix_rgb(self, x: torch.Tensor, not_rgb: torch.Tensor):
-        if not_rgb.any():
+        if self.fix_rgb and not_rgb.any():
             fixed = x.clone()
             fixed[not_rgb] = einops.repeat(
                 rgb_to_gray(x[not_rgb], True),

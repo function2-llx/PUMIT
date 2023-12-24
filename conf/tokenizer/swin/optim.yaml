@@ -1,11 +1,13 @@
 model: model.yaml
 training:
   max_steps: 500000
+  disc_loss_momentum: 0.95
+  use_gan_th: 0.025
 optim_g:
 - optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 3e-4
+      lr: 5e-4
       weight_decay: 5e-2
   lr_scheduler:
     scheduler:
@@ -21,8 +23,8 @@ optim_d:
 - optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 1e-3
-      weight_decay: 5e-2
+      lr: 2e-4
+      weight_decay: 0.5
   lr_scheduler:
     scheduler:
       class_path: timm.scheduler.CosineLRScheduler
