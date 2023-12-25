@@ -81,7 +81,7 @@ class SwinPatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
         super().__init__()
 
         num_layers = len(layer_channels)
-        assert num_layers == 3
+        # assert num_layers == 3
         self.append(
             spadop.InputConv3D(in_channels, layer_channels[0], 4, 4),
         )

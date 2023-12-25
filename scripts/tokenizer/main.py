@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
 
 from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as FabricBase
+from lightning.fabric.plugins import Precision
 from lightning.pytorch.loggers import WandbLogger
 import torch
+from torch import nn
 from torch.optim import Optimizer
 from torchvision.utils import save_image
 from tqdm import tqdm
@@ -13,7 +14,6 @@ from tqdm import tqdm
 from luolib.lightning import OptimizationConf, build_hybrid_optimization
 from luolib.models import spadop
 from luolib.models.utils import load_ckpt
-from luolib.utils.grad import grad_norm
 
 from pumit.datamodule import PUMITDataModule
 from pumit.tokenizer import VQVTLoss, VQVisualTokenizer
@@ -117,11 +117,11 @@ class Fabric(FabricBase):
 
     def clip_gradients(
         self,
-        module: Union[torch.nn.Module, _FabricModule],
-        optimizer: Union[Optimizer, _FabricOptimizer],
-        clip_val: Optional[Union[float, int]] = None,
-        max_norm: Optional[Union[float, int]] = None,
-        norm_type: Union[float, int] = 2.0,
+        module: nn.Module | _FabricModule,
+        optimizer: Optimizer | _FabricOptimizer,
+        clip_val: float | int | None = None,
+        max_norm: float | int | None = None,
+        norm_type: float | int = 2.0,
         error_if_nonfinite: bool = True,
     ) -> torch.Tensor | None:
         """clip gradients for both value and norm"""
@@ -146,7 +146,7 @@ class Fabric(FabricBase):
             )
 
 def main():
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision('medium')
     torch.multiprocessing.set_start_method('spawn')
     parser = get_parser()
     raw_args = parser.parse_args()
@@ -191,6 +191,8 @@ def main():
     model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
+    # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
+    loss_module.discriminator._precision = Precision()
     datamodule: PUMITDataModule = args.data
     datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
