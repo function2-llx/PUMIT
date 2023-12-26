@@ -2,7 +2,8 @@ model: model.yaml
 training:
   max_steps: 500000
   disc_loss_momentum: 0.9
-  use_gan_th: 0.03
+  gan_start_th: 0.05
+  gan_stop_th: 0.2
   max_norm_g: 5
   max_norm_d: 2
 optim_g:

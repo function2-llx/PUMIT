@@ -4,6 +4,7 @@ import einops
 from lightning import Fabric
 import torch
 from torch import nn
+from torch.nn import functional as nnf
 
 from luolib.losses import SlicePerceptualLoss
 from luolib.models import spadop
@@ -40,7 +41,7 @@ class VQVTLoss(nn.Module):
         self,
         quant_weight: float,
         entropy_weight: float,
-        rec_loss: Literal['l1', 'l2'],
+        post_family: Literal['Laplace', 'normal'],
         rec_weight: float,
         perceptual_loss: SlicePerceptualLoss,
         perceptual_weight: float,
@@ -49,15 +50,30 @@ class VQVTLoss(nn.Module):
         adaptive_gan_weight: bool = False,
         fix_rgb: bool = False,
     ):
+        """
+        Args:
+            quant_weight:
+            entropy_weight:
+            post_family: family of post distribution, laplace → l1, normal → l2
+            rec_weight:
+            perceptual_loss:
+            perceptual_weight:
+            discriminator:
+            gan_weight:
+            adaptive_gan_weight:
+            fix_rgb: whether to convert reconstruction of non-RGB to gray scale for discriminator, which may make the
+            task more difficult
+        """
         super().__init__()
         self.quant_weight = quant_weight
         self.entropy_weight = entropy_weight
         self.rec_weight = rec_weight
-        match rec_loss:
-            case 'l1':
-                self.rec_loss = nn.L1Loss()
-            case 'l2':
-                self.rec_loss = nn.MSELoss()
+        self.post_family = post_family
+        match post_family:
+            case 'Laplace':
+                self.rec_loss_fn = nn.L1Loss(reduction='none')
+            case 'normal':
+                self.rec_loss_fn = nn.MSELoss(reduction='none')
             case _:
                 raise ValueError
         self.perceptual_loss = perceptual_loss
@@ -92,24 +108,34 @@ class VQVTLoss(nn.Module):
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
+    def rec_loss(self, x_logits: torch.Tensor, x_rec_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x_rec_logits_mu = x_rec_logits[:, :x_logits.shape[1]]
+        x_rec_logits_log_scale = x_rec_logits[:, x_logits.shape[1]:]
+        # scale=1/b for Laplace, 1/var for normal
+        x_rec_logits_scale = x_rec_logits_log_scale.exp()
+        loss = -x_rec_logits_log_scale.mean() + (self.rec_loss_fn(x_rec_logits_mu, x_logits) * x_rec_logits_scale).mean()
+        x_rec = x_rec_logits_mu.sigmoid()
+        return loss, x_rec
+
     def forward_gen(
         self,
         x: spadop.SpatialTensor,
-        x_rec: spadop.SpatialTensor,
+        x_rec_logits: spadop.SpatialTensor,
         not_rgb: torch.Tensor,
         vq_out: VectorQuantizerOutput,
         use_gan_loss: bool,
-        ref_param: nn.Parameter | None = None,
+        gan_weight_ref_param: nn.Parameter | None = None,
         fabric: Fabric | None = None,
     ) -> tuple[torch.Tensor, dict]:
-        rec_loss = self.rec_loss(x, x_rec)
+        x_logits = (x / 1 - x).log()
+        rec_loss, x_rec = self.rec_loss(x_logits, x_rec_logits)
         perceptual_loss = self.perceptual_loss(x_rec, x)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * vq_out.loss
         if vq_out.entropy is not None:
             vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
 
         # always calculate GAN loss since it will be used elsewhere
-        score_fake = self.disc_fix_rgb(x_rec, not_rgb)
+        score_fake = self.disc_fix_rgb(x_rec_logits, not_rgb)
         gan_loss = -score_fake.mean()
         if use_gan_loss:
             gan_weight = self.gan_weight
@@ -117,7 +143,7 @@ class VQVTLoss(nn.Module):
                 gan_weight *= calculate_adaptive_weight(
                     vq_loss.as_subclass(torch.Tensor),
                     gan_loss.as_subclass(torch.Tensor),
-                    ref_param,
+                    gan_weight_ref_param,
                     fabric=fabric,
                 )
         else:
@@ -155,7 +181,7 @@ class VQVTLoss(nn.Module):
         not_rgb: torch.Tensor,
         log_dict: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, dict]:
-        score_real = self.disc_fix_rgb(x.detach(), not_rgb)
+        score_real = self.discriminator(x.detach())
         score_fake = self.disc_fix_rgb(x_rec.detach(), not_rgb)
         disc_loss = 0.5 * hinge_loss(score_real, score_fake)
         log_dict['disc_loss'] = disc_loss

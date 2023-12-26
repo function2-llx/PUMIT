@@ -7,6 +7,7 @@ from torch.types import Device
 from monai import transforms as mt
 from monai.data import get_random_patch
 from monai.utils import GridSampleMode, GridSamplePadMode, ImageMetaKey, convert_to_tensor
+from pumit.datamodule import TransInfo
 
 def get_rotation_matrix(axis: Sequence[float], θ: float) -> np.ndarray:
     cos = np.cos(θ)
@@ -56,7 +57,7 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
 
     def __call__(self, data: dict):
         data = dict(data)
-        trans_info = data['_trans']
+        trans_info: TransInfo = data['_trans']
         spacing = data['spacing']
         spacing_xy = spacing[1:].min()
         axis, θ = self.get_rotation(spacing)
@@ -75,7 +76,7 @@ class PUMITLoader(mt.Randomizable, mt.Transform):
         else:
             # scale always goes first for anisotropic data
             affine = scale_affine @ rotate_affine
-        patch_size = trans_info['size']
+        patch_size = trans_info['patch_size']
         load_size = np.ceil(np.abs(affine) @ patch_size).astype(np.int32)
         load_slice = get_random_patch(
             data['shape'], np.minimum(data['shape'], load_size), self.R,

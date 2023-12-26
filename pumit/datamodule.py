@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypedDict
 
 from lightning import LightningDataModule
 import numpy as np
@@ -11,7 +11,7 @@ from torch.utils.data import Dataset as TorchDataset, Sampler
 from tqdm import tqdm
 
 from luolib import transforms as lt
-from luolib.types import tuple2_t
+from luolib.types import tuple2_t, tuple3_t
 from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
@@ -65,7 +65,12 @@ class TransformConf:
         prob_invert: float = 0.25
     gamma_correction: GammaCorrection = field(default_factory=GammaCorrection)
 
-def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomState) -> dict:
+class TransInfo(TypedDict):
+    aniso_d: int
+    scale: tuple3_t[float]
+    patch_size: tuple3_t[int]
+
+def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomState) -> TransInfo:
     shape = np.array(data['shape'])
     origin_size_xy = shape[1:].min().item()
     spacing = data['spacing']
@@ -82,7 +87,7 @@ def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomSta
         scale_xy = 1.
     size_xy = trans_conf.size_xy
 
-    if spacing_z <= 3 * spacing_xy and R.uniform() < trans_conf.scale_z_p:
+    if spacing_z < 3 * spacing_xy and R.uniform() < trans_conf.scale_z_p:
         scale_z = R.uniform(*trans_conf.scale_z)
     else:
         scale_z = 1.
@@ -95,15 +100,17 @@ def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomSta
     else:
         # make sure base_size_z is not smaller than 32
         size_z = trans_conf.base_size_z >> aniso_d
+        while size_z * scale_z >= 2 * shape[0]:
+            size_z >>= 1
 
     return {
         'aniso_d': aniso_d,
-        'scale': np.array((scale_z, scale_xy, scale_xy)),
-        'size': np.array((size_z, size_xy, size_xy)),
+        'scale': (scale_z, scale_xy, scale_xy),
+        'patch_size': (size_z, size_xy, size_xy),
     }
 
 class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
-    """put samples with the same DA into a batch"""
+    """put samples with the same DA & patch_size into a batch"""
     def __init__(
         self,
         data: list[dict],
@@ -142,8 +149,9 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
             for i in self.weight.multinomial(self.buffer_size, replacement=True).tolist():
                 data = self.data[i]
                 trans_info = gen_trans_info(data, trans_conf, self.R)
-                bucket.setdefault(aniso_d := trans_info['aniso_d'], []).append((i, trans_info))
-                if len(batch := bucket[aniso_d]) == self.batch_size:
+                bucket_key = trans_info['aniso_d'], trans_info['patch_size']
+                bucket.setdefault(bucket_key, []).append((i, trans_info))
+                if len(batch := bucket[bucket_key]) == self.batch_size:
                     if next_rank == self.rank:
                         if num_skipped_batches >= self.num_skip_batches:
                             yield batch
@@ -153,14 +161,14 @@ class PUMITDistributedBatchSampler(Sampler[list[tuple[int, dict]]]):
                         if remain_batches == 0:
                             break
                     next_rank = (next_rank + 1) % self.num_replicas
-                    bucket.pop(aniso_d)
+                    bucket.pop(bucket_key)
 
 class PUMITDataset(TorchDataset):
     def __init__(self, data: list[dict], transform: Callable):
         self.data = data
         self.transform = transform
 
-    def __getitem__(self, item: tuple[int, dict]):
+    def __getitem__(self, item: tuple[int, TransInfo]):
         index, trans_info = item
         data = dict(self.data[index])
         data['_trans'] = trans_info

@@ -14,9 +14,9 @@ discriminator:
   class_path: pumit.tokenizer.discriminator.SwinPatchDiscriminator
   init_args:
     in_channels: 3
-    layer_channels: [96, 192]
-    layer_depths: [2, 2]
-    layer_num_heads: [3, 6]
+    layer_channels: [96, 192, 384]
+    layer_depths: [2, 2, 6]
+    layer_num_heads: [3, 6, 12]
     grad_ckpt: false
-gan_weight: 5e-3
+gan_weight: 1e-2
 adaptive_gan_weight: false

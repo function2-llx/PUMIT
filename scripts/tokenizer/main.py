@@ -4,6 +4,7 @@ from pathlib import Path
 from jsonargparse import ActionConfigFile, ArgumentParser
 from lightning.fabric import Fabric as FabricBase
 from lightning.fabric.plugins import Precision
+from lightning.fabric.wrappers import _FabricModule, _FabricOptimizer
 from lightning.pytorch.loggers import WandbLogger
 import torch
 from torch import nn
@@ -16,7 +17,8 @@ from luolib.models import spadop
 from luolib.models.utils import load_ckpt
 
 from pumit.datamodule import PUMITDataModule
-from pumit.tokenizer import VQVTLoss, VQVisualTokenizer
+from pumit.tokenizer import VQVTLoss, VQVisualTokenizer, smooth_image, smooth_image_inv
+from pumit.tokenizer.discriminator import PatchDiscriminatorBase
 from pumit.tokenizer.vq import GumbelVQ
 
 @dataclass(kw_only=True)
@@ -27,6 +29,7 @@ class TrainingArguments:
     save_last_every_n_steps: int = 1000
     plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000
+    accumulate_grad_batches: int = 1
     max_norm_g: float | None = None
     max_norm_d: float | None = None
     resume_ckpt_path: Path | None = None
@@ -35,7 +38,8 @@ class TrainingArguments:
     exp_name: str
     disc_loss_ema_init: float = 1.
     disc_loss_momentum: float = 0.9
-    use_gan_th: float = 0.03
+    gan_start_th: float = 0.05
+    gan_stop_th: float = 0.2
     benchmark: bool = False
     pretrained_codebook: Path | None = None
     fix_codebook: bool = False
@@ -113,8 +117,6 @@ def check_loss(loss: torch.Tensor, state: dict, batch, save_dir: Path, fabric: F
             torch.save(batch, save_dir / f'batch-{fabric.local_rank}.pt')
 
 class Fabric(FabricBase):
-    from lightning.fabric.wrappers import _FabricModule, _FabricOptimizer
-
     def clip_gradients(
         self,
         module: nn.Module | _FabricModule,
@@ -168,7 +170,7 @@ def main():
 
     # the shape of our data varies, but enabling this still seems to be faster
     torch.backends.cudnn.benchmark = training_args.benchmark
-    model: VQVisualTokenizer = args.model
+    model: VQVisualTokenizer | _FabricModule = args.model
     optimizer_g, lr_scheduler_g = build_hybrid_optimization(model, args.optim_g)
     loss_module: VQVTLoss = args.loss
     optimizer_d, lr_scheduler_d = build_hybrid_optimization(loss_module.discriminator, args.optim_d)
@@ -183,20 +185,22 @@ def main():
         'optimizer_g': optimizer_g,
         'optimizer_d': optimizer_d,
         'step': 0,
+        'use_gan_loss': False,
     }
     load_state(model, loss_module, state, training_args, fabric)
-    optimized_steps = state['step']
+    optimization_step = state['step']
 
     # setup model and optimizer after checkpoint loading, or optimizer.param_groups[i] will be different object
     model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
+    discriminator: PatchDiscriminatorBase | _FabricModule  = loss_module.discriminator
     # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
-    loss_module.discriminator._precision = Precision()
+    discriminator._precision = Precision()
     datamodule: PUMITDataModule = args.data
     datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
-        datamodule.train_dataloader(optimized_steps),
+        datamodule.train_dataloader(optimization_step),
         datamodule.val_dataloader(),
         use_distributed_sampler=False,
     )
@@ -207,61 +211,72 @@ def main():
     grad_norm_dict = MetricDict()
     disc_loss_ema = training_args.disc_loss_ema_init
     for step, batch in enumerate(
-        tqdm(train_loader, desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0, initial=optimized_steps),
-        start=optimized_steps,
+        tqdm(train_loader, desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0, initial=optimization_step),
+        start=optimization_step,
     ):
+        optimization_step = step + 1
+        accumulating = optimization_step % training_args.accumulate_grad_batches != 0
+        # 0. prepare input
         x, not_rgb, aniso_d, paths = batch
-        x = 2 * x - 1
-        x = spadop.SpatialTensor(x, aniso_d)
+        x_smoothed = smooth_image(x)
+        x_smoothed = spadop.SpatialTensor(x_smoothed, aniso_d)
+        # 1. generator part
+        discriminator.requires_grad_(False)
         if isinstance(model.quantize, GumbelVQ):
             model.quantize.adjust_temperature(step, training_args.max_steps)
-        x_rec, vq_out = model(x, autoencode=True, fabric=fabric)
-        loss_module.discriminator.requires_grad_(False)
-        loss, log_dict = loss_module.forward_gen(
-            x, x_rec, not_rgb, vq_out,
-            disc_loss_ema <= training_args.use_gan_th, model.get_ref_param(),
-            fabric,
-        )
-        fabric.backward(loss)
+        # TODO: disable DDP forward for discriminator in this part
+        with fabric.no_backward_sync(model, accumulating):
+            x_rec_smoothed_logits, vq_out = model(x_smoothed, autoencode=True, fabric=fabric)
+            loss, log_dict = loss_module.forward_gen(
+                x_smoothed, x_rec_smoothed_logits, not_rgb, vq_out,
+                state['use_gan_loss'], model.get_ref_param(),
+                fabric,
+            )
+            fabric.backward(loss)
         check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
         # calling this will unscale the gradients as well
         grad_norm_g = fabric.clip_gradients(model, optimizer_g, 1, training_args.max_norm_g)
         if step % lr_scheduler_g.frequency == 0:
             lr_scheduler_g.scheduler.step(step)
             fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)
-        optimizer_g.step()
-        optimizer_g.zero_grad()
-        loss_module.discriminator.requires_grad_(True)
-        disc_loss, log_dict = loss_module.forward_disc(x, x_rec, not_rgb, log_dict)
-        fabric.backward(disc_loss)
+        if not accumulating:
+            optimizer_g.step()
+            optimizer_g.zero_grad()
+        # 2. discriminator part
+        discriminator.requires_grad_(True)
+        with fabric.no_backward_sync(discriminator, accumulating):
+            disc_loss, log_dict = loss_module.forward_disc(x_smoothed, x_rec_smoothed_logits, not_rgb, log_dict)
+            fabric.backward(disc_loss)
         check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
         grad_norm_d = fabric.clip_gradients(loss_module.discriminator, optimizer_d, 1, training_args.max_norm_d)
         if step % lr_scheduler_d.frequency == 0:
             lr_scheduler_d.scheduler.step(step)
             fabric.log('lr-d', optimizer_d.param_groups[0]['lr'], step)
-        optimizer_d.step()
-        optimizer_d.zero_grad()
+        if not accumulating:
+            optimizer_d.step()
+            optimizer_d.zero_grad()
         disc_loss = fabric.all_reduce(disc_loss).item()
-        if disc_loss >= disc_loss_ema:
-            disc_loss_ema = disc_loss
-        else:
-            disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss * (1 - training_args.disc_loss_momentum)
+        disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss * (1 - training_args.disc_loss_momentum)
+        if disc_loss_ema < training_args.gan_start_th:
+            state['use_gan_loss'] = True
+        elif disc_loss_ema > training_args.gan_stop_th:
+            state['use_gan_loss'] = False
+        # -1. logging, plotting, saving, etc.
         log_dict['disc_loss'] = disc_loss
         log_dict['disc_loss_ema'] = disc_loss_ema
         metric_dict.update_metrics(log_dict)
         grad_norm_dict.update_metrics({'gen': grad_norm_g, 'disc': grad_norm_d})
-        optimized_steps = step + 1
-        if optimized_steps % training_args.log_every_n_steps == 0 or optimized_steps == training_args.max_steps:
-            log_dict_split(fabric, 'train', metric_dict, optimized_steps)
-            log_dict_split(fabric, 'grad-norm', grad_norm_dict, optimized_steps)
+        if optimization_step % training_args.log_every_n_steps == 0 or optimization_step == training_args.max_steps:
+            log_dict_split(fabric, 'train', metric_dict, optimization_step)
+            log_dict_split(fabric, 'grad-norm', grad_norm_dict, optimization_step)
             if isinstance(model.quantize, GumbelVQ):
-                fabric.log('train/temperature', model.quantize.temperature, optimized_steps)
-        if optimized_steps % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
-            plot_rec(img_save_dir, optimized_steps, paths, x, x_rec)
-        state['step'] = optimized_steps
-        if optimized_steps % training_args.save_every_n_steps == 0:
-            fabric.save(ckpt_save_dir / f'step={optimized_steps}.ckpt', state)
-        if optimized_steps % training_args.save_last_every_n_steps == 0:
+                fabric.log('train/temperature', model.quantize.temperature, optimization_step)
+        if optimization_step % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:
+            plot_rec(img_save_dir, optimization_step, paths, x, x_rec_smoothed_logits)
+        state['step'] = optimization_step
+        if optimization_step % training_args.save_every_n_steps == 0:
+            fabric.save(ckpt_save_dir / f'step={optimization_step}.ckpt', state)
+        if optimization_step % training_args.save_last_every_n_steps == 0:
             fabric.save(ckpt_save_dir / f'last.ckpt', state)
 
 def load_state(
@@ -295,15 +310,15 @@ def load_state(
     if training_args.fix_codebook:
         model.quantize.requires_grad_(False)
 
-def plot_rec(img_save_dir, optimized_steps, paths, x, x_rec):
+def plot_rec(img_save_dir: Path, optimized_steps: int, paths: list[Path], x: torch.Tensor, x_rec_smoothed_logits: torch.Tensor):
     step_save_dir = img_save_dir / f'step-{optimized_steps}'
     step_save_dir.mkdir(parents=True)
     (step_save_dir / 'path.txt').write_text(str(paths[0]))
-    scaled_x = (x[0] + 1) / 2
-    scaled_x_rec = (x_rec[0] + 1) / 2
+    x_rec_smoothed = x_rec_smoothed_logits.sigmoid()
+    x_rec = smooth_image_inv(x_rec_smoothed)
     for i in range(x.shape[2]):
-        save_image(scaled_x[:, i], step_save_dir / f'{i}-origin.png')
-        save_image(scaled_x_rec[:, i], step_save_dir / f'{i}-rec.png')
+        save_image(x[:, i], step_save_dir / f'{i}-origin.png')
+        save_image(x_rec[:, i], step_save_dir / f'{i}-rec.png')
 
 if __name__ == '__main__':
     main()
