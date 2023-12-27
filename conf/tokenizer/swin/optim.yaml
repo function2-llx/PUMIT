@@ -4,8 +4,12 @@ training:
   disc_loss_momentum: 0.9
   gan_start_th: 0.05
   gan_stop_th: 0.2
-  max_norm_g: 5
-  max_norm_d: 2
+  max_norm_g: null
+  max_norm_d: null
+  accumulate_grad_batches: 1
+data:
+  dataloader:
+    train_batch_size: 8
 optim_g:
 - optimizer:
     class_path: torch.optim.AdamW

@@ -4,14 +4,14 @@ init_args:
     class_path: pumit.tokenizer.vq.SoftVQ
     init_args:
       num_embeddings: 1024
-      embedding_dim: ${...encoder_output_channels}
+      embedding_dim: 512
       prune: 16
   in_channels: 3
-  encoder_layer_channels: [96, 192, 384]
-  encoder_layer_depths: [2, 2, 6]
-  encoder_layer_num_heads: [3, 6, 12]
-  encoder_output_channels: 384
-  decoder_layer_channels: [96, 192, 384]
-  decoder_layer_depths: [2, 2, 2]
-  decoder_layer_num_heads: [3, 6, 12]
+  encoder_dim: 512
+  encoder_depth: 10
+  encoder_num_heads: 16
+  decoder_dim: 512
+  decoder_depth: 10
+  decoder_num_heads: 16
+  output_scale: true
   grad_ckpt: false

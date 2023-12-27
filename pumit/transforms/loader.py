@@ -6,8 +6,9 @@ from torch.types import Device
 
 from monai import transforms as mt
 from monai.data import get_random_patch
-from monai.utils import GridSampleMode, GridSamplePadMode, ImageMetaKey, convert_to_tensor
-from pumit.datamodule import TransInfo
+from monai.utils import GridSampleMode, GridSamplePadMode, ImageMetaKey
+
+from .info import TransInfo
 
 def get_rotation_matrix(axis: Sequence[float], θ: float) -> np.ndarray:
     cos = np.cos(θ)

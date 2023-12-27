@@ -1,5 +1,3 @@
-dataloader:
-  train_batch_size: 4
 transform:
   base_size_z: 128
   size_xy: 128

@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal
 
 from lightning import LightningDataModule
 import numpy as np
@@ -8,16 +8,15 @@ import pandas as pd
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
-from tqdm import tqdm
 
 from luolib import transforms as lt
-from luolib.types import tuple2_t, tuple3_t
+from luolib.types import tuple2_t
 from monai.config import PathLike
 from monai.data import Dataset as MONAIDataset, DataLoader
 from monai import transforms as mt
 
-from pumit.reader import PUMITReader
-from pumit.transforms import AdaptivePadD, InputTransformD, PUMITLoader
+from .reader import PUMITReader
+from .transforms import AdaptivePadD, InputTransformD, PUMITLoader, TransInfo
 
 DATA_ROOT = Path('processed-data')
 
@@ -25,9 +24,9 @@ DATA_ROOT = Path('processed-data')
 class DataLoaderConf:
     train_batch_size: int | None = None
     val_batch_size: int = 1  # default=1, or help me write another distributed batch sampler for validation
-    num_train_batches: int | None = None
-    num_workers: int = 8
-    prefetch_factor: int | None = 32
+    num_train_batches: int
+    num_workers: int
+    prefetch_factor: int | None = 8
 
 @dataclass(kw_only=True)
 class TransformConf:
@@ -65,11 +64,6 @@ class TransformConf:
         prob_invert: float = 0.25
     gamma_correction: GammaCorrection = field(default_factory=GammaCorrection)
 
-class TransInfo(TypedDict):
-    aniso_d: int
-    scale: tuple3_t[float]
-    patch_size: tuple3_t[int]
-
 def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomState) -> TransInfo:
     shape = np.array(data['shape'])
     origin_size_xy = shape[1:].min().item()
@@ -98,9 +92,11 @@ def gen_trans_info(data: dict, trans_conf: TransformConf, R: np.random.RandomSta
         # extremely anisotropic data, then treat it as 2D
         size_z = 1
     else:
-        # make sure base_size_z is not smaller than 32
         size_z = trans_conf.base_size_z >> aniso_d
-        while size_z * scale_z >= 2 * shape[0]:
+        downsample_z = max(0, 4 - aniso_d)
+        # avoid too much padding, but also make sure that there's enough size to downsample
+        # TODO: constant optimization
+        while size_z >> downsample_z + 1 and size_z * scale_z >= 2 * shape[0]:
             size_z >>= 1
 
     return {
@@ -182,6 +178,10 @@ class PUMITDataModule(LightningDataModule):
         seed: int | None = 42,
         device: Literal['cpu', 'cuda'] = 'cpu',
     ):
+        """
+        Args:
+            seed: controls batch sampler (with scale transformation)
+        """
         super().__init__()
         self.train_data = pd.DataFrame()
         self.val_data = pd.DataFrame()
@@ -206,6 +206,8 @@ class PUMITDataModule(LightningDataModule):
         weights_3d = dataset_info[dataset_info['dims'] == 3]['sqrt-weights'].sum()
         # make the ratio of 2D:3D=1:3
         weights_ratio = 3 * weights_2d / weights_3d
+        # fix seed to fix validation samples
+        sample_random_state = np.random.RandomState(42)
         for dataset_name in dataset_info.index:
             dataset_dir = DATA_ROOT / dataset_name
             meta: pd.DataFrame = pd.read_pickle(dataset_dir / 'meta.pkl')
@@ -217,7 +219,7 @@ class PUMITDataModule(LightningDataModule):
             meta['img'] = meta.index.map(lambda key: dataset_dir / 'data' / f'{key}.npy')
             for modality in meta['modality'].unique():
                 sub_meta = meta[meta['modality'] == modality]
-                val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=self.R)
+                val_sample = sub_meta.sample(1, weights=sub_meta['weight'], random_state=sample_random_state)
                 self.train_data = pd.concat([self.train_data, sub_meta.drop(index=val_sample.index)])
                 self.val_data = pd.concat([self.val_data, val_sample])
         self.dataset_info = dataset_info

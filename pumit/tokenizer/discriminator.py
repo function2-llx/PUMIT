@@ -70,30 +70,9 @@ class SimplePatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
         self.append(spadop.InputConv3D(layer_channels[-1], 1, 3, padding=1))
 
 class SwinPatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
-    def __init__(
-        self,
-        in_channels: int,
-        layer_channels: Sequence[int],
-        layer_depths: Sequence[int],
-        layer_num_heads: Sequence[int],
-        grad_ckpt: bool = False,
-    ):
-        super().__init__()
-
-        num_layers = len(layer_channels)
-        # assert num_layers == 3
-        self.append(
-            spadop.InputConv3D(in_channels, layer_channels[0], 4, 4),
+    def __init__(self, in_channels: int, patch_size: int, dim: int, depth: int, num_heads: int):
+        super().__init__(
+            spadop.PatchEmbed(in_channels, dim, patch_size, True),
+            spadop.SwinLayer(dim, depth, num_heads, 4, last_norm=True),
+            spadop.Conv3d(dim, 1, 1),
         )
-        for i in range(num_layers):
-            self.append(
-                spadop.SwinLayer(
-                    layer_channels[i], layer_depths[i], layer_num_heads[i], 4,
-                    last_norm=True, grad_ckpt=grad_ckpt,
-                )
-            )
-            if i + 1 < len(layer_channels):
-                self.append(
-                    spadop.Conv3d(layer_channels[i], layer_channels[i + 1], 2, 2),
-                )
-        self.append(spadop.InputConv3D(layer_channels[-1], 1, 1))

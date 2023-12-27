@@ -10,7 +10,7 @@ from torch.nn import functional as nnf
 @dataclass
 class VectorQuantizerOutput:
     z_q: torch.Tensor
-    """vector quantization results, input for decoder"""
+    """vector quantization results, channel last, input for decoder"""
     index: torch.Tensor
     """codebook index, can be a discrete one or soft one (categorical distribution over codebook)"""
     loss: torch.Tensor

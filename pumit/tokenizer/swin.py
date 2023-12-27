@@ -1,5 +1,3 @@
-from collections.abc import Sequence
-
 from torch import nn
 
 from luolib.models import spadop
@@ -15,79 +13,35 @@ class SwinVQVT(VQVisualTokenizer):
     def __init__(
         self,
         in_channels: int,
-        encoder_layer_channels: Sequence[int],
-        encoder_layer_depths: Sequence[int],
-        encoder_layer_num_heads: Sequence[int],
-        encoder_output_channels: int,
-        decoder_layer_channels: Sequence[int],
-        decoder_layer_depths: Sequence[int],
-        decoder_layer_num_heads: Sequence[int],
+        encoder_dim: int, encoder_depth: int, encoder_num_heads: int,
+        decoder_dim: int, decoder_depth: int, decoder_num_heads: int,
+        output_scale: bool,
         grad_ckpt: bool = False,
-        *args,
-        **kwargs,
+        *args, **kwargs,
     ):
         """
         Args:
-            in_channels:
-            encoder_layer_channels:
-            encoder_layer_depths:
-            encoder_layer_num_heads:
-            encoder_output_channels: map the feature map channels to this number with an MLP as the input of VQ module
-            decoder_layer_channels:
-            decoder_layer_depths:
-            decoder_layer_num_heads:
-            grad_ckpt:
-            *args:
-            **kwargs:
+            output_scale: whether to output (log) scale of the distribution (e.g., b for Laplace, σ for normal)
         """
         super().__init__(*args, **kwargs)
-        encoder_num_layers = len(encoder_layer_channels)
-        decoder_num_layers = len(encoder_layer_channels)
-        assert encoder_num_layers == decoder_num_layers == 3
         self.encoder = nn.Sequential(
-            spadop.InputConv3D(in_channels, encoder_layer_channels[0], 4, 4),
-        )
-        for i in range(encoder_num_layers):
-            self.encoder.append(
-                spadop.SwinLayer(
-                    encoder_layer_channels[i], encoder_layer_depths[i], encoder_layer_num_heads[i], 4,
-                    last_norm=True, grad_ckpt=grad_ckpt,
-                )
-            )
-            if i + 1 < len(encoder_layer_channels):
-                self.encoder.append(
-                    spadop.Conv3d(encoder_layer_channels[i], encoder_layer_channels[i + 1], 2, 2),
-                )
-        self.encoder.extend([
+            spadop.PatchEmbed(in_channels, encoder_dim, 16, True),
+            spadop.SwinLayer(
+                encoder_dim, encoder_depth, encoder_num_heads, 4,
+                last_norm=True, grad_ckpt=grad_ckpt,
+            ),
             ChannelLast(),
-            nn.Linear(encoder_layer_channels[-1], encoder_output_channels),
-            nn.LayerNorm(encoder_output_channels),
-            nn.GELU(),
-        ])
-
-        self.decoder = nn.Sequential(
-            nn.Linear(self.quantize.embedding_dim, decoder_layer_channels[-1]),
-            nn.LayerNorm(decoder_layer_channels[-1]),
-            nn.GELU(),
-            nn.Linear(decoder_layer_channels[-1], decoder_layer_channels[-1]),
-            ChannelFirst(),
         )
-        for i in reversed(range(decoder_num_layers)):
-            self.decoder.append(
-                spadop.SwinLayer(
-                    decoder_layer_channels[i], decoder_layer_depths[i], decoder_layer_num_heads[i], 4,
-                    last_norm=True, grad_ckpt=grad_ckpt,
-                )
-            )
-            if i > 0:
-                self.decoder.append(
-                    spadop.TransposedConv3d(decoder_layer_channels[i], decoder_layer_channels[i - 1], 2, 2),
-                )
-        self.decoder.append(
-            # there can be something like OutputTransposedConv3d, but unnecessary
-            spadop.TransposedConv3d(
-                decoder_layer_channels[0], in_channels, 4, 4,
-            )
+        self.decoder = nn.Sequential(
+            ChannelFirst(),
+            spadop.SwinLayer(
+                decoder_dim, decoder_depth, decoder_num_heads, 4,
+                last_norm=True, grad_ckpt=grad_ckpt,
+            ),
+            spadop.InversePatchEmbed(
+                decoder_dim, in_channels * 2 if output_scale else in_channels,
+                16, True,
+            ),
         )
 
     def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:

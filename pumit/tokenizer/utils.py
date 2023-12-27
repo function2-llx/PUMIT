@@ -1,14 +1,12 @@
 import torch
 
 __all__ = [
-    'smooth_image',
-    'smooth_image_inv',
+    'LOGIT_EPS',
+    'logit_inv',
 ]
 
-eps = 1e-2
+LOGIT_EPS = 1e-3
 
-def smooth_image(x: torch.Tensor) -> torch.Tensor:
-    return (1 - 2 * eps) * x + eps
-
-def smooth_image_inv(x: torch.Tensor) -> torch.Tensor:
-    return ((x - eps) / (1 - 2 * eps)).clamp_(min=0, max=1)
+def logit_inv(x: torch.Tensor) -> torch.Tensor:
+    x = x.sigmoid()
+    return ((x - LOGIT_EPS) / (1 - 2 * LOGIT_EPS)).clamp_(min=0, max=1)

@@ -11,6 +11,7 @@ from torch import nn
 from luolib.models import spadop
 from luolib.models.utils import load_ckpt
 
+from .utils import logit_inv
 from .vq import VectorQuantizer, VectorQuantizerOutput
 
 class VQVisualTokenizer(ABC, nn.Module):
@@ -32,16 +33,17 @@ class VQVisualTokenizer(ABC, nn.Module):
     def decode(self, z_q: spadop.SpatialTensor) -> spadop.SpatialTensor:
         pass
 
-    def autoencode(self, x: spadop.SpatialTensor, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, VectorQuantizerOutput]:
-        z = self.encode(x)
+    def autoencode(self, x_logit: spadop.SpatialTensor, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, spadop.SpatialTensor, VectorQuantizerOutput]:
+        z = self.encode(x_logit)
         vq_out: VectorQuantizerOutput = self.quantize(z, fabric)
-        x_rec = self.decode(vq_out.z_q)
-        return x_rec, vq_out
+        x_rec_logit = self.decode(vq_out.z_q)
+        x_rec = logit_inv(x_rec_logit[:, :x_logit.shape[1]])
+        return x_rec, x_rec_logit, vq_out
 
-    def forward(self, x: spadop.SpatialTensor, *, autoencode: bool = False, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, VectorQuantizerOutput] | VectorQuantizerOutput:
+    def forward(self, x_logit: spadop.SpatialTensor, *, autoencode: bool = False, fabric: Fabric | None = None) -> tuple[spadop.SpatialTensor, VectorQuantizerOutput] | VectorQuantizerOutput:
         if autoencode:
-            return self.autoencode(x, fabric)
-        z = self.encode(x)
+            return self.autoencode(x_logit, fabric)
+        z = self.encode(x_logit)
         vq_out: VectorQuantizerOutput = self.quantize(z)
         return vq_out
 
