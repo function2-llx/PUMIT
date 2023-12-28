@@ -19,5 +19,5 @@ discriminator:
     dim: 512
     depth: 6
     num_heads: 16
-gan_weight: 2e-3
+gan_weight: 0.1
 adaptive_gan_weight: false
