@@ -132,7 +132,8 @@ class VQVTLoss(nn.Module):
         if vq_out.entropy is not None:
             vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
         # always calculate GAN loss even when not including in total loss, since it may be used elsewhere
-        score_fake = self.discriminator(x_rec_logit[:, :x.shape[1]])
+        with torch.set_grad_enabled(use_gan_loss):
+            score_fake = self.discriminator(x_rec_logit[:, :x.shape[1]])
         gan_loss = -score_fake.mean()
         if use_gan_loss:
             gan_weight = self.gan_weight

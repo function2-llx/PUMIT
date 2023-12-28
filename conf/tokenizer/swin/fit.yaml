@@ -3,6 +3,5 @@ data: data.yaml
 training:
   exp_name: tokenizer-swin
   seed: 42
-  output_dir: output/${.exp_name}
   plot_image_every_n_steps: 500
   benchmark: true
