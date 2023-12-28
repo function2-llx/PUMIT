@@ -1,7 +1,7 @@
 quant_weight: 1
 entropy_weight: 0.1
 post_family: Laplace
-rec_scale: true
+rec_scale: false
 rec_weight: 1
 perceptual_loss:
   class_path: luolib.losses.SlicePerceptualLoss
