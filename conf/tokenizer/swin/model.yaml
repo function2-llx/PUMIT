@@ -13,5 +13,5 @@ init_args:
   decoder_dim: 512
   decoder_depth: 10
   decoder_num_heads: 16
-  output_scale: true
+  output_scale: false
   grad_ckpt: false

@@ -1,6 +1,6 @@
 quant_weight: 1
 entropy_weight: 0.1
-post_family: normal
+post_family: Laplace
 rec_scale: true
 rec_weight: 1
 perceptual_loss:
