@@ -3,6 +3,7 @@ from typing import Literal
 from lightning import Fabric
 import torch
 from torch import nn
+from torch.nn import functional as nnf
 
 from luolib.losses import SlicePerceptualLoss
 from luolib.models import spadop
@@ -98,7 +99,7 @@ class VQVTLoss(nn.Module):
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def rec_loss(self, x_rec_logit: torch.Tensor, x_logit: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def rec_loss(self, x_rec_logit: torch.Tensor, x_logit: torch.Tensor) -> torch.Tensor:
         x_rec_logit_mu = x_rec_logit[:, :x_logit.shape[1]]
         if self.rec_scale:
             x_rec_logit_log_scale = x_rec_logit[:, x_logit.shape[1]:]
@@ -106,10 +107,9 @@ class VQVTLoss(nn.Module):
             x_rec_logit_scale = x_rec_logit_log_scale.exp()
             diff = self.rec_loss_fn(x_rec_logit_mu, x_logit)
             loss = -x_rec_logit_log_scale.mean() + (diff * x_rec_logit_scale).mean()
-            diff = diff.mean()
         else:
-            diff = loss = self.rec_loss_fn(x_rec_logit_mu, x_logit)
-        return loss, diff
+            loss = self.rec_loss_fn(x_rec_logit_mu, x_logit)
+        return loss
 
     def forward_gen(
         self,
@@ -126,7 +126,7 @@ class VQVTLoss(nn.Module):
         Args:
             x_rec_logit: this main be (mu, scale) of the reconstruction logit
         """
-        rec_loss, diff = self.rec_loss(x_rec_logit, x_logit)
+        rec_loss = self.rec_loss(x_rec_logit, x_logit)
         perceptual_loss = self.perceptual_loss(x_rec, x)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * vq_out.loss
         if vq_out.entropy is not None:
@@ -150,7 +150,6 @@ class VQVTLoss(nn.Module):
         log_dict = {
             'loss': loss,
             'rec_loss': rec_loss,
-            'diff': diff,
             'perceptual_loss': perceptual_loss,
             'quant_loss': vq_out.loss,
             'util_var': vq_out.util_var,
@@ -158,6 +157,9 @@ class VQVTLoss(nn.Module):
             'gan_loss': gan_loss,
             'gan_weight': gan_weight,
         }
+        with torch.no_grad():
+            log_dict['l1'] = nnf.l1_loss(x_rec, x)
+            log_dict['l2'] = nnf.mse_loss(x_rec, x)
         if vq_out.entropy is not None:
             log_dict['entropy'] = vq_out.entropy
         return loss, log_dict

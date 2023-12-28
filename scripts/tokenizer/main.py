@@ -31,8 +31,8 @@ class TrainingArguments:
     plot_image_every_n_steps: int = 100
     save_every_n_steps: int = 10000
     accumulate_grad_batches: int = 1
-    max_norm_g: float | None = None
-    max_norm_d: float | None = None
+    grad_norm_g: float | None = None
+    grad_norm_d: float | None = None
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
     output_dir: Path | None = None
@@ -130,7 +130,12 @@ class Fabric(FabricBase):
         unscale_gradients: bool = True,
         return_norm: bool = False,
     ) -> torch.Tensor | None:
-        """clip gradients for both value and norm"""
+        """
+        clip gradients for both value and norm
+        Args:
+            return_norm: always return gradient norm after clipping by value
+        Returns:
+        """
         if unscale_gradients:
             self.unscale_gradients(optimizer)
         if clip_val is None and max_norm is None:
@@ -268,7 +273,7 @@ def main():
                 fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)
             fabric.unscale_gradients(optimizer_g)
             grad_norm_dict.update_metrics({'gen': grad_norm(model)})
-            fabric.clip_gradients(model, optimizer_g, training_args.max_norm_g, unscale_gradients=False)
+            fabric.clip_gradients(model, optimizer_g, max_norm=training_args.grad_norm_g, unscale_gradients=False)
             grad_norm_dict.update_metrics({'gen-clipped': grad_norm(model)})
             optimizer_g.step()
             optimizer_g.zero_grad()
@@ -279,7 +284,7 @@ def main():
             if not state['use_gan_loss']:
                 fabric.unscale_gradients(optimizer_d)
                 grad_norm_dict.update_metrics({'disc': grad_norm(discriminator)})
-                fabric.clip_gradients(discriminator, optimizer_d, training_args.max_norm_d, unscale_gradients=False)
+                fabric.clip_gradients(discriminator, optimizer_d, max_norm=training_args.grad_norm_d, unscale_gradients=False)
                 grad_norm_dict.update_metrics({'disc-clipped': grad_norm(discriminator)})
                 optimizer_d.step()
                 optimizer_d.zero_grad()
