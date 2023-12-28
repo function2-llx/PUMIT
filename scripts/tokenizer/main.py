@@ -44,6 +44,7 @@ class TrainingArguments:
     benchmark: bool = False
     pretrained_codebook: Path | None = None
     fix_codebook: bool = False
+    precision: str = '32-true'
 
 def get_parser():
     parser = ArgumentParser(parser_mode='omegaconf')
@@ -127,19 +128,20 @@ class Fabric(FabricBase):
         error_if_nonfinite: bool = True,
         *,
         unscale_gradients: bool = True,
+        return_norm: bool = True,
     ) -> torch.Tensor | None:
         """clip gradients for both value and norm"""
         if unscale_gradients:
             self.unscale_gradients(optimizer)
         if clip_val is None and max_norm is None:
-            return None
+            return grad_norm(module) if return_norm else None
         optimizer = _unwrap_objects(optimizer)
         module = _unwrap_objects(module)
         parameters = self.strategy.precision.main_params(optimizer)
         if clip_val is not None:
-            ret = torch.nn.utils.clip_grad_value_(parameters, clip_value=clip_val)
+            torch.nn.utils.clip_grad_value_(parameters, clip_value=clip_val)
             if max_norm is None:
-                return ret
+                return grad_norm(module) if return_norm else None
             return torch.nn.utils.clip_grad_norm_(
                 self.strategy.precision.main_params(optimizer),
                 max_norm, norm_type, error_if_nonfinite,
@@ -159,7 +161,8 @@ def main():
     training_args: TrainingArguments = args.training
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
     logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='pumit')
-    fabric = Fabric(precision='16-mixed', loggers=logger)
+    fabric = Fabric(precision=training_args.precision, loggers=logger)
+    print('precision:', fabric.strategy.precision.precision)
     fabric.seed_everything(training_args.seed)
     fabric.launch()
     save_dir = training_args.output_dir / Path(logger.experiment.dir).parent.name if fabric.is_global_zero else None
@@ -240,10 +243,17 @@ def main():
                 fabric.backward(loss / training_args.accumulate_grad_batches)
             check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
             # 2. discriminator part
-            discriminator.requires_grad_(True)
-            with fabric.no_backward_sync(discriminator, accumulating):
-                disc_loss, log_dict = loss_module.forward_disc(x_logit, x_rec_logit, log_dict)
-                fabric.backward(disc_loss / training_args.accumulate_grad_batches)
+            if state['use_gan_loss']:
+                # if generator is using gan loss, then fix discriminator (simulate alternative training)
+                discriminator.eval()
+                with torch.no_grad():
+                    disc_loss, log_dict = loss_module.forward_disc(x_logit, x_rec_logit, log_dict)
+            else:
+                discriminator.train()
+                discriminator.requires_grad_(True)
+                with fabric.no_backward_sync(discriminator, accumulating):
+                    disc_loss, log_dict = loss_module.forward_disc(x_logit, x_rec_logit, log_dict)
+                    fabric.backward(disc_loss / training_args.accumulate_grad_batches)
             check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
             metric_dict.update_metrics(log_dict)
             if accumulating:
@@ -255,19 +265,28 @@ def main():
                 lr_scheduler_g.scheduler.step(step)
                 fabric.log('lr-g', optimizer_g.param_groups[0]['lr'], step)
             fabric.unscale_gradients(optimizer_g)
-            grad_norm_g = grad_norm(model)
-            fabric.clip_gradients(model, optimizer_g, training_args.max_norm_g, unscale_gradients=False)
+            grad_norm_dict.update_metrics({
+                'gen': grad_norm(model),
+                'gen-clipped': fabric.clip_gradients(
+                    model, optimizer_g, training_args.max_norm_g, unscale_gradients=False, return_norm=True,
+                )
+            })
             optimizer_g.step()
             optimizer_g.zero_grad()
             # 3.2 optimize discriminator
             if step % lr_scheduler_d.frequency == 0:
                 lr_scheduler_d.scheduler.step(step)
                 fabric.log('lr-d', optimizer_d.param_groups[0]['lr'], step)
-            fabric.unscale_gradients(optimizer_d)
-            grad_norm_d = grad_norm(discriminator)
-            fabric.clip_gradients(discriminator, optimizer_d, training_args.max_norm_d, unscale_gradients=False)
-            optimizer_d.step()
-            optimizer_d.zero_grad()
+            if not state['use_gan_loss']:
+                fabric.unscale_gradients(optimizer_d)
+                grad_norm_dict.update_metrics({
+                    'disc': grad_norm(discriminator),
+                    'disc-clipped': fabric.clip_gradients(
+                        discriminator, optimizer_d, training_args.max_norm_d, unscale_gradients=False, return_norm=True,
+                    )
+                })
+                optimizer_d.step()
+                optimizer_d.zero_grad()
             # -1. logging, plotting, saving, etc.
             disc_loss = sum(metric_dict['disc_loss']) / len(metric_dict['disc_loss'])
             disc_loss = fabric.all_reduce(disc_loss).item()
@@ -277,7 +296,6 @@ def main():
             elif disc_loss_ema > training_args.gan_stop_th:
                 state['use_gan_loss'] = False
             metric_dict.update_metrics({'disc_loss_ema': disc_loss_ema})
-            grad_norm_dict.update_metrics({'gen': grad_norm_g, 'disc': grad_norm_d})
             if optimization_step % training_args.log_every_n_steps == 0 or optimization_step == training_args.max_steps:
                 log_dict_split(fabric, 'train', metric_dict, optimization_step)
                 log_dict_split(fabric, 'grad-norm', grad_norm_dict, optimization_step)
