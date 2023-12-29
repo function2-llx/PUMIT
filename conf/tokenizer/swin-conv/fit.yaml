@@ -1,0 +1,8 @@
+loss: loss.yaml
+data: data.yaml
+training:
+  output_root: output/tokenizer
+  exp_name: swin-conv
+  seed: 42
+  plot_image_every_n_steps: 500
+  benchmark: true

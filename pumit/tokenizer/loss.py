@@ -47,6 +47,7 @@ class VQVTLoss(nn.Module):
         discriminator: PatchDiscriminatorBase,
         gan_weight: float = 1.0,
         adaptive_gan_weight: bool = False,
+        max_log_scale: float = 9.,
     ):
         """
         Args:
@@ -76,6 +77,7 @@ class VQVTLoss(nn.Module):
         assert discriminator is not None
         self.discriminator = discriminator
         print(f'{self.__class__}: running with hinge W-GAN loss')
+        self.max_log_scale = max_log_scale
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):
@@ -100,15 +102,18 @@ class VQVTLoss(nn.Module):
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def rec_loss(self, x_rec_logit: torch.Tensor, x_logit: torch.Tensor) -> torch.Tensor:
-        x_rec_logit_mu = x_rec_logit[:, :x_logit.shape[1]]
+        mu = x_rec_logit[:, :x_logit.shape[1]]
         if self.rec_scale:
-            x_rec_logit_log_scale = x_rec_logit[:, x_logit.shape[1]:]
+            log_scale = x_rec_logit[:, x_logit.shape[1]:]
+            with torch.no_grad():
+                clamped_log_scale = log_scale.clamp(max=self.max_log_scale)
+            log_scale = clamped_log_scale - log_scale.detach() + log_scale
             # scale=1/b for Laplace, 1/var for normal
-            x_rec_logit_scale = x_rec_logit_log_scale.exp()
-            diff = self.rec_loss_fn(x_rec_logit_mu, x_logit)
-            loss = -x_rec_logit_log_scale.mean() + (diff * x_rec_logit_scale).mean()
+            scale = log_scale.exp()
+            diff = self.rec_loss_fn(mu, x_logit)
+            loss = -log_scale.mean() + (diff * scale).mean()
         else:
-            loss = self.rec_loss_fn(x_rec_logit_mu, x_logit)
+            loss = self.rec_loss_fn(mu, x_logit)
         return loss
 
     def forward_gen(

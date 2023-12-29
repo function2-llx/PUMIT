@@ -35,6 +35,7 @@ class TrainingArguments:
     grad_norm_d: float | None = None
     resume_ckpt_path: Path | None = None
     pretrained_ckpt_path: Path | None = None
+    output_root: Path = 'output'
     output_dir: Path | None = None
     exp_name: str
     disc_loss_ema_init: float = 1.
@@ -165,7 +166,7 @@ def main():
     args = parser.instantiate_classes(raw_args)
     training_args: TrainingArguments = args.training
     if training_args.output_dir is None:
-        training_args.output_dir = Path('output') / training_args.exp_name
+        training_args.output_dir = training_args.output_root / training_args.exp_name
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
     logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='pumit')
     fabric = Fabric(precision=training_args.precision, loggers=logger)
