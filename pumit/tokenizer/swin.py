@@ -7,6 +7,7 @@ from .base import VQVisualTokenizer
 
 __all__ = [
     'SwinVQVT',
+    'SwinConvVQVT',
 ]
 
 class SwinVQVT(VQVisualTokenizer):
@@ -73,7 +74,7 @@ class ResNetBasicBlock(nn.Module):
         x = self.conv2(x)
         return res + x
 
-class SwinConvVQVT(nn.Module):
+class SwinConvVQVT(VQVisualTokenizer):
     def __init__(
         self,
         in_channels: int,
@@ -105,7 +106,7 @@ class SwinConvVQVT(nn.Module):
                 )
                 for i in range(3)
             ],
-            spadop.TransposedConv3d(dim >> 3, in_channels * 2, 4, 4),
+            spadop.TransposedConv3d(dim >> 2, in_channels * 2, 4, 4),
         )
 
     def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:

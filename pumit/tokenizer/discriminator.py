@@ -72,7 +72,7 @@ class SimplePatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
 class SwinPatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
     def __init__(self, in_channels: int, patch_size: int, dim: int, depth: int, num_heads: int):
         super().__init__(
-            spadop.PatchEmbed(in_channels, dim, patch_size, True),
+            spadop.PatchEmbed(in_channels, dim, patch_size, 3, True),
             spadop.SwinLayer(dim, depth, num_heads, 4, last_norm=True),
             spadop.Conv3d(dim, 1, 1),
         )
