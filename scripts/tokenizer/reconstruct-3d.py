@@ -9,13 +9,13 @@ from luolib.models import spadop
 from luolib.models.utils import load_ckpt
 from monai import transforms as mt
 from monai.data import MetaTensor
-from pumit.tokenizer import VQVisualTokenizer, VQVAEModel
+from pumit.tokenizer import LOGIT_EPS, VQVisualTokenizer, VQVAEModel
 from pumit.transforms import ensure_rgb, rgb_to_gray
 
 src = Path('test-images/amos_0065.nii.gz')
 
 def main():
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision('medium')
     parser = ArgumentParser()
     parser.add_subclass_arguments(VQVisualTokenizer, 'model')
     parser.add_argument('--ckpt_path', type=Path)
@@ -40,12 +40,13 @@ def main():
     x = spadop.SpatialTensor(meta_tensor.as_tensor(), aniso_d)
     nib.save(nib.Nifti1Image(x[0].detach().float().cpu().numpy(), affine.numpy()), 'origin.nii.gz')
     print(x.shape, x.num_pending_hw_downsamples)
-    model = args.model.cuda().train()
+    model: VQVisualTokenizer = args.model.cuda().train()
     # load_ckpt(model, args.ckpt_path, state_dict_key='model')
     load_ckpt(model, args.ckpt_path, state_dict_key='state_dict')
     with torch.no_grad():
-        x_rec, quant_out = model(ensure_rgb(x * 2 - 1)[None])
-        x_rec = (x_rec + 1) / 2
+        x, _ = ensure_rgb(x)
+        x = x[None]
+        x_rec, x_rec_logit, vq_out = model.autoencode(x.logit(LOGIT_EPS))
         x_rec = rgb_to_gray(x_rec[0])
     for i in range(x_rec.shape[1]):
         save_image(x_rec[:, i], f'r3d/{i}-rec.png')

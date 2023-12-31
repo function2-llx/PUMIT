@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Literal
 
 from lightning import Fabric
@@ -11,28 +12,13 @@ from luolib.models import spadop
 from .discriminator import PatchDiscriminatorBase
 from .vq import VectorQuantizerOutput
 
-@torch.no_grad()
-def calculate_adaptive_weight(
-    loss1: torch.Tensor,
-    loss2: torch.Tensor,
-    ref_param: nn.Parameter,
-    eps: float = 1e-6,
-    minv: float = 0.,
-    maxv: float = 1e4,
-    fabric: Fabric | None = None,
-):
-    """calculate adaptive weight balancing the gradient norm for loss2"""
-    grad1, = torch.autograd.grad(loss1, ref_param, retain_graph=True)
-    grad2, = torch.autograd.grad(loss2, ref_param, retain_graph=True)
-    if fabric is not None:
-        grad1 = fabric.all_reduce(grad1.contiguous())
-        grad2 = fabric.all_reduce(grad2.contiguous())
-    weight = grad1.norm() / (grad2.norm() + eps)
-    weight.clamp_(minv, maxv)
-    return weight
-
 def hinge_loss(score_real: torch.Tensor, score_fake: torch.Tensor):
     return (1 - score_real).relu().mean() + (1 + score_fake).relu().mean()
+
+@dataclass
+class ParameterWrapper:
+    """use this class to prevent parameter being registered under nn.Module"""
+    param: nn.Parameter | None
 
 class VQVTLoss(nn.Module):
     def __init__(
@@ -45,15 +31,18 @@ class VQVTLoss(nn.Module):
         perceptual_loss: SlicePerceptualLoss,
         perceptual_weight: float,
         discriminator: PatchDiscriminatorBase,
-        gan_weight: float = 1.0,
-        adaptive_gan_weight: bool = False,
-        max_log_scale: float = 8.,
+        gan_weight: float,
+        adaptive_gan_weight: bool,
+        grad_ema_decay: float = 0.9,
+        max_log_scale: float = 8,
     ):
         """
         Args:
             post_family: family of post distribution, laplace → l1, normal → l2
             rec_scale: whether reconstruction has the scale parameter
             adaptive_gan_weight: do you like VQGAN?
+            max_log_scale: log_scale lather than this value will be clamped. empirically, this value should be smaller
+            with Laplace than normal
         """
         super().__init__()
         self.quant_weight = quant_weight
@@ -78,6 +67,7 @@ class VQVTLoss(nn.Module):
         self.discriminator = discriminator
         print(f'{self.__class__}: running with hinge W-GAN loss')
         self.max_log_scale = max_log_scale
+        self.grad_ema_decay = grad_ema_decay
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         if not any(key.startswith(f'{prefix}discriminator.main') for key in state_dict):
@@ -101,8 +91,9 @@ class VQVTLoss(nn.Module):
 
         return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def rec_loss(self, x_rec_logit: torch.Tensor, x_logit: torch.Tensor) -> torch.Tensor:
+    def rec_loss(self, x_rec_logit: torch.Tensor, x_logit: torch.Tensor) -> tuple[torch.Tensor, dict]:
         mu = x_rec_logit[:, :x_logit.shape[1]]
+        log_dict = {}
         if self.rec_scale:
             log_scale = x_rec_logit[:, x_logit.shape[1]:]
             with torch.no_grad():
@@ -111,10 +102,36 @@ class VQVTLoss(nn.Module):
             # scale=1/b for Laplace, 1/var for normal
             scale = log_scale.exp()
             diff = self.rec_loss_fn(mu, x_logit)
-            loss = -log_scale.mean() + (diff * scale).mean()
+            log_scale = log_scale.mean()
+            loss = -log_scale + (diff * scale).mean()
+            log_dict['log-scale'] = log_scale
+            with torch.no_grad():
+                log_dict['scale'] = scale.mean()
         else:
             loss = self.rec_loss_fn(mu, x_logit)
-        return loss
+        log_dict['rec_loss'] = loss
+        return loss, log_dict
+
+    grad_vq_ema: torch.Tensor
+    grad_gan_ema: torch.Tensor
+
+    def set_gan_ref_param(self, param: nn.Parameter):
+        # it's not a good idea trying to use property setter in nn.Module: https://github.com/pytorch/pytorch/issues/52664
+        self.gan_ref_param = ParameterWrapper(param)
+        self.register_buffer('grad_vq_ema', torch.zeros_like(param))
+        self.register_buffer('grad_gan_ema', torch.zeros_like(param))
+
+    @torch.no_grad()
+    def adapt_gan_weight(self, vq_loss: torch.Tensor, gan_loss: torch.Tensor, fabric: Fabric):
+        grad_vq, = torch.autograd.grad(vq_loss, self.gan_ref_param.param, retain_graph=True)
+        grad_vq = fabric.all_reduce(grad_vq.contiguous())
+        self.grad_vq_ema.mul_(self.grad_ema_decay).add_(grad_vq, alpha=1 - self.grad_ema_decay)
+        grad_gan, = torch.autograd.grad(gan_loss, self.gan_ref_param.param, retain_graph=True)
+        grad_gan = fabric.all_reduce(grad_gan.contiguous())
+        self.grad_gan_ema.mul_(self.grad_ema_decay).add_(grad_gan, alpha=1 - self.grad_ema_decay)
+        scale = grad_vq.norm() / (grad_gan.norm() + 1e-6)
+        scale.clamp_(max=1e4)
+        return scale
 
     def forward_gen(
         self,
@@ -124,44 +141,38 @@ class VQVTLoss(nn.Module):
         x_rec_logit: spadop.SpatialTensor,
         vq_out: VectorQuantizerOutput,
         use_gan_loss: bool,
-        gan_weight_ref_param: nn.Parameter | None = None,
         fabric: Fabric | None = None,
     ) -> tuple[torch.Tensor, dict]:
         """
         Args:
-            x_rec_logit: this main be (mu, scale) of the reconstruction logit
+            x_rec_logit: this may be (mu, scale) of the reconstruction logit
         """
-        rec_loss = self.rec_loss(x_rec_logit, x_logit)
+        rec_loss, log_dict = self.rec_loss(x_rec_logit, x_logit)
         perceptual_loss = self.perceptual_loss(x_rec, x)
         vq_loss = rec_loss + self.perceptual_weight * perceptual_loss + self.quant_weight * vq_out.loss
         if vq_out.entropy is not None:
             vq_loss = vq_loss + self.entropy_weight * vq_out.entropy
-        # always calculate GAN loss even when not including in total loss, since it may be used elsewhere
-        with torch.set_grad_enabled(use_gan_loss):
+        with torch.set_grad_enabled(self.adaptive_gan_weight or use_gan_loss):
             score_fake = self.discriminator(x_rec_logit[:, :x.shape[1]])
         gan_loss = -score_fake.mean()
+        if self.adaptive_gan_weight:
+            gan_loss_scale = self.adapt_gan_weight(vq_loss, gan_loss, fabric)
+        else:
+            gan_loss_scale = 1
         if use_gan_loss:
-            gan_weight = self.gan_weight
-            if self.adaptive_gan_weight:
-                gan_weight *= calculate_adaptive_weight(
-                    vq_loss.as_subclass(torch.Tensor),
-                    gan_loss.as_subclass(torch.Tensor),
-                    gan_weight_ref_param,
-                    fabric=fabric,
-                )
+            gan_weight = self.gan_weight * gan_loss_scale
         else:
             gan_weight = 0
         loss = vq_loss + gan_weight * gan_loss
-        log_dict = {
+        log_dict.update({
             'loss': loss,
-            'rec_loss': rec_loss,
             'perceptual_loss': perceptual_loss,
             'quant_loss': vq_out.loss,
             'util_var': vq_out.util_var,
             'vq_loss': vq_loss,
             'gan_loss': gan_loss,
             'gan_weight': gan_weight,
-        }
+        })
         with torch.no_grad():
             log_dict['l1'] = nnf.l1_loss(x_rec, x)
             log_dict['l2'] = nnf.mse_loss(x_rec, x)

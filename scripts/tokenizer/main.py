@@ -39,10 +39,10 @@ class TrainingArguments:
     output_root: Path = 'output'
     output_dir: Path | None = None
     exp_name: str
-    disc_loss_ema_init: float = 1.
     disc_loss_momentum: float = 0.9
     gan_start_th: float = 0.05
     gan_stop_th: float = 0.2
+    gan_start_step: int
     benchmark: bool = False
     pretrained_codebook: Path | None = None
     fix_codebook: bool = False
@@ -210,6 +210,7 @@ def main():
     loss_module = fabric.to_device(loss_module)
     loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
     discriminator: PatchDiscriminatorBase | _FabricModule = loss_module.discriminator
+    loss_module.set_gan_ref_param(model.get_ref_param())
     # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
     discriminator._precision = Precision()
     datamodule: PUMITDataModule = args.data
@@ -224,7 +225,7 @@ def main():
 
     metric_dict = MetricDict()
     grad_norm_dict = MetricDict()
-    disc_loss_ema = training_args.disc_loss_ema_init
+    disc_loss_ema = 1.
     train_loader_iter = iter(train_loader)
     for step in trange(
         optimization_step, training_args.max_steps,
@@ -247,7 +248,7 @@ def main():
                 # TODO: disable DDP forward for discriminator in this part
                 loss, log_dict = loss_module.forward_gen(
                     x, x_logit, x_rec, x_rec_logit, vq_out,
-                    state['use_gan_loss'], model.get_ref_param(), fabric,
+                    state['use_gan_loss'], fabric,
                 )
                 fabric.backward(loss / training_args.accumulate_grad_batches)
             check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
@@ -294,7 +295,7 @@ def main():
             disc_loss = sum(metric_dict['disc_loss']) / len(metric_dict['disc_loss'])
             disc_loss = fabric.all_reduce(disc_loss).item()
             disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss * (1 - training_args.disc_loss_momentum)
-            if disc_loss_ema < training_args.gan_start_th:
+            if optimization_step >= training_args.gan_start_step and disc_loss_ema < training_args.gan_start_th:
                 state['use_gan_loss'] = True
             elif disc_loss_ema > training_args.gan_stop_th:
                 state['use_gan_loss'] = False
