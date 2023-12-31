@@ -219,7 +219,7 @@ class ViT(nn.Module):
 
     def prepare_seq_input(self, x: torch.Tensor):
         x = self.patch_embed(x)
-        shape = x.shape[2:]
+        shape: torch.Size = x.shape[2:]
         x += spadop.resample(self.pos_embed, shape)
         x = self.pos_drop(x)
         x = torch.cat(
@@ -242,11 +242,11 @@ class ViT(nn.Module):
                 x = block(x)
             states.append(x)
         self.rope.reset()
-        return states
+        return states, shape
 
     def forward(self, x: torch.Tensor):
-        x = self.forward_features(x)[-1]
-        return self.norm(x)
+        states, shape = self.forward_features(x)
+        return self.norm(states[-1])
 
     def _load_from_state_dict(self, state_dict: dict[str, torch.Tensor], prefix: str, *args, **kwargs):
         for k in list(state_dict):
