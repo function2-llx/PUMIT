@@ -47,7 +47,7 @@ class VQVTLoss(nn.Module):
         discriminator: PatchDiscriminatorBase,
         gan_weight: float = 1.0,
         adaptive_gan_weight: bool = False,
-        max_log_scale: float = 9.,
+        max_log_scale: float = 8.,
     ):
         """
         Args:

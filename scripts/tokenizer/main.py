@@ -21,6 +21,7 @@ from pumit.datamodule import PUMITDataModule
 from pumit.tokenizer import LOGIT_EPS, VQVTLoss, VQVisualTokenizer
 from pumit.tokenizer.discriminator import PatchDiscriminatorBase
 from pumit.tokenizer.vq import GumbelVQ
+from pumit.transforms import rgb_to_gray
 
 @dataclass(kw_only=True)
 class TrainingArguments:
@@ -347,9 +348,11 @@ def plot_rec(img_save_dir: Path, optimized_steps: int, paths: list[Path], x: tor
     step_save_dir = img_save_dir / f'step-{optimized_steps}'
     step_save_dir.mkdir(parents=True)
     (step_save_dir / 'path.txt').write_text(str(paths[0]))
+    x_rec_gray = rgb_to_gray(x_rec[0])
     for i in range(x.shape[2]):
         save_image(x[0, :, i], step_save_dir / f'{i}-origin.png')
         save_image(x_rec[0, :, i], step_save_dir / f'{i}-rec.png')
+        save_image(x_rec_gray[:, i], step_save_dir / f'{i}-rec-gray.png')
 
 if __name__ == '__main__':
     main()

@@ -4,7 +4,7 @@ training:
   disc_loss_momentum: 0.9
   gan_start_th: 0.02
   gan_stop_th: 0.2
-  grad_norm_g: 5
+  grad_norm_g: 10
   grad_norm_d: 1
   accumulate_grad_batches: 1
 data:
@@ -14,7 +14,7 @@ optim_g:
 - optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 5e-4
+      lr: 1e-3
       weight_decay: 5e-2
   lr_scheduler:
     scheduler:

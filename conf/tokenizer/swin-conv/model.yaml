@@ -3,13 +3,12 @@ init_args:
   quantize:
     class_path: pumit.tokenizer.vq.SoftVQ
     init_args:
-      num_embeddings: 1024
+      num_embeddings: 4096
       embedding_dim: 256
       prune: 16
   in_channels: 3
-  patch_embed_kernel_size: 3
   dim: 256
-  encoder_depth: 10
-  encoder_num_heads: 8
-  num_groups: 16
+  num_heads: 8
+  depths: [2, 2, 6]
+  num_groups: 8
   grad_ckpt: false

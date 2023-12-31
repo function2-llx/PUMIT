@@ -1,3 +1,4 @@
+import cytoolz
 from torch import nn
 
 from luolib.models import spadop
@@ -78,35 +79,40 @@ class SwinConvVQVT(VQVisualTokenizer):
     def __init__(
         self,
         in_channels: int,
-        patch_embed_kernel_size: int,
         dim: int,
-        encoder_depth: int,
-        encoder_num_heads: int,
+        num_heads: int,
+        depths: list[int],
         num_groups: int,
         grad_ckpt: bool = False,
         *args, **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        num_downsamples = len(depths) - 1
         self.encoder = nn.Sequential(
-            spadop.PatchEmbed(
-                in_channels, dim, 16, patch_embed_kernel_size, True,
-            ),
-            spadop.SwinLayer(
-                dim, encoder_depth, encoder_num_heads, 4, last_norm=True, grad_ckpt=grad_ckpt,
-            ),
+            *cytoolz.concat([
+                [
+                    spadop.PatchEmbed(in_channels, dim >> num_downsamples, 4, 3, True)
+                    if i == 0 else spadop.Conv3d(dim >> num_downsamples - i + 1, dim >> num_downsamples - i, 2, 2),
+                    spadop.SwinLayer(
+                        dim >> num_downsamples - i, depths[i], num_heads >> num_downsamples - i, 4,
+                        last_norm=True, grad_ckpt=grad_ckpt,
+                    )
+                ]
+                for i in range(num_downsamples + 1)
+            ]),
             ChannelLast(),
         )
         self.decoder = nn.Sequential(
             ChannelFirst(),
-            *[
-                nn.Sequential(
+            *cytoolz.concat([
+                [
                     nn.Identity() if i == 0 else
                     spadop.TransposedConv3d(dim >> i - 1, dim >> i, 2, 2),
                     ResNetBasicBlock(dim >> i, num_groups >> i),
-                )
-                for i in range(3)
-            ],
-            spadop.TransposedConv3d(dim >> 2, in_channels * 2, 4, 4),
+                ]
+                for i in range(num_downsamples + 2)
+            ]),
+            spadop.TransposedConv3d(dim >> 2, in_channels * 2, 2, 2),
         )
 
     def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
