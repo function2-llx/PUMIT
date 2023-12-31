@@ -172,6 +172,7 @@ class VQVTLoss(nn.Module):
             'vq_loss': vq_loss,
             'gan_loss': gan_loss,
             'gan_weight': gan_weight,
+            'gan_loss_scale': gan_loss_scale,
         })
         with torch.no_grad():
             log_dict['l1'] = nnf.l1_loss(x_rec, x)
