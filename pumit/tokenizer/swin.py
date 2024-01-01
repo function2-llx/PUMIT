@@ -102,7 +102,7 @@ class SwinConvVQVT(VQVisualTokenizer):
             ]),
             ChannelLast(),
         )
-        num_upsamples = num_downsamples + 1
+        num_upsamples = num_downsamples
         self.decoder = nn.Sequential(
             ChannelFirst(),
             *cytoolz.concat([
@@ -113,7 +113,7 @@ class SwinConvVQVT(VQVisualTokenizer):
                 ]
                 for i in range(num_upsamples + 1)
             ]),
-            spadop.TransposedConv3d(dim >> num_upsamples, in_channels * 2, 2, 2),
+            spadop.TransposedConv3d(dim >> num_upsamples, in_channels * 2, 4, 4),
         )
 
     def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:

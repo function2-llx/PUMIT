@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 
+import torch
 from torch import nn
 
 from luolib.models import spadop
@@ -12,6 +13,10 @@ __all__ = [
 ]
 
 class PatchDiscriminatorBase(nn.Module):
+    # save state
+    grad_vq_ema: torch.Tensor
+    grad_gan_ema: torch.Tensor
+
     def forward(self, x: spadop.SpatialTensor):
         """
         Returns:

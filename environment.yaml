@@ -1,3 +1,4 @@
+name: pumit
 channels:
 - conda-forge
 - pytorch
@@ -7,7 +8,7 @@ dependencies:
 - python=3.11
 - omegaconf
 - numpy
-- pytorch::pytorch=2.1.1
+- pytorch::pytorch=2.1.2
 - llvm-openmp<16  # https://github.com/pytorch/pytorch/issues/99625
 - pytorch::pytorch-cuda=11.8
 - pytorch::torchvision

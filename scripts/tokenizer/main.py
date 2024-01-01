@@ -188,12 +188,20 @@ def main():
     model: VQVisualTokenizer | _FabricModule = args.model
     optimizer_g, lr_scheduler_g = build_hybrid_optimization(model, args.optim_g)
     loss_module: VQVTLoss = args.loss
+    loss_module.set_gan_ref_param(model.get_ref_param())
     optimizer_d, lr_scheduler_d = build_hybrid_optimization(loss_module.discriminator, args.optim_d)
 
     if fabric.is_global_zero:
         Path(save_dir / 'model.txt').write_text(repr(model))
         Path(save_dir / 'loss.txt').write_text(repr(loss_module))
 
+    # setup optimizer before loading the checkpoint: https://github.com/Lightning-AI/pytorch-lightning/issues/19225
+    model, optimizer_g = fabric.setup(model, optimizer_g)
+    loss_module = fabric.to_device(loss_module)
+    loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
+    discriminator: PatchDiscriminatorBase | _FabricModule = loss_module.discriminator
+    # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
+    discriminator._precision = Precision()
     state = {
         'model': model,
         'discriminator': loss_module.discriminator,
@@ -202,17 +210,10 @@ def main():
         'step': 0,
         'use_gan_loss': False,
     }
+    # NOTE: learning rate update frequency should divide the step to recover the learning rate
     load_state(model, loss_module, state, training_args, fabric)
     optimization_step = state['step']
 
-    # setup model and optimizer after checkpoint loading, or optimizer.param_groups[i] will be different object
-    model, optimizer_g = fabric.setup(model, optimizer_g)
-    loss_module = fabric.to_device(loss_module)
-    loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
-    discriminator: PatchDiscriminatorBase | _FabricModule = loss_module.discriminator
-    loss_module.set_gan_ref_param(model.get_ref_param())
-    # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
-    discriminator._precision = Precision()
     datamodule: PUMITDataModule = args.data
     datamodule.setup_ddp(fabric.local_rank, fabric.global_rank, fabric.world_size)
     train_loader, val_loader = fabric.setup_dataloaders(
@@ -228,7 +229,7 @@ def main():
     disc_loss_ema = 1.
     train_loader_iter = iter(train_loader)
     for step in trange(
-        optimization_step, training_args.max_steps,
+        training_args.max_steps,
         desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0, initial=optimization_step
     ):
         optimization_step = step + 1

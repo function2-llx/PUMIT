@@ -7,7 +7,7 @@ training:
   grad_norm_g: 10
   grad_norm_d: 1
   accumulate_grad_batches: 1
-  gan_start_step: 30000
+  gan_start_step: 0
 data:
   dataloader:
     train_batch_size: 8
@@ -31,8 +31,8 @@ optim_d:
 - optimizer:
     class_path: torch.optim.AdamW
     init_args:
-      lr: 2e-4
-      weight_decay: 0.5
+      lr: 1e-4
+      weight_decay: 5e-2
   lr_scheduler:
     scheduler:
       class_path: timm.scheduler.CosineLRScheduler

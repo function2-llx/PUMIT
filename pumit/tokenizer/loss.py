@@ -33,7 +33,7 @@ class VQVTLoss(nn.Module):
         discriminator: PatchDiscriminatorBase,
         gan_weight: float,
         adaptive_gan_weight: bool,
-        grad_ema_decay: float = 0.9,
+        grad_ema_decay: float,
         max_log_scale: float = 8,
     ):
         """
@@ -112,24 +112,20 @@ class VQVTLoss(nn.Module):
         log_dict['rec_loss'] = loss
         return loss, log_dict
 
-    grad_vq_ema: torch.Tensor
-    grad_gan_ema: torch.Tensor
-
     def set_gan_ref_param(self, param: nn.Parameter):
         # it's not a good idea trying to use property setter in nn.Module: https://github.com/pytorch/pytorch/issues/52664
         self.gan_ref_param = ParameterWrapper(param)
-        self.register_buffer('grad_vq_ema', torch.zeros_like(param))
-        self.register_buffer('grad_gan_ema', torch.zeros_like(param))
+        self.discriminator.register_buffer('grad_vq_ema', torch.zeros_like(param))
+        self.discriminator.register_buffer('grad_gan_ema', torch.zeros_like(param))
 
     @torch.no_grad()
     def adapt_gan_weight(self, vq_loss: torch.Tensor, gan_loss: torch.Tensor, fabric: Fabric):
         grad_vq, = torch.autograd.grad(vq_loss, self.gan_ref_param.param, retain_graph=True)
-        grad_vq = fabric.all_reduce(grad_vq.contiguous())
-        self.grad_vq_ema.mul_(self.grad_ema_decay).add_(grad_vq, alpha=1 - self.grad_ema_decay)
         grad_gan, = torch.autograd.grad(gan_loss, self.gan_ref_param.param, retain_graph=True)
-        grad_gan = fabric.all_reduce(grad_gan.contiguous())
-        self.grad_gan_ema.mul_(self.grad_ema_decay).add_(grad_gan, alpha=1 - self.grad_ema_decay)
-        scale = grad_vq.norm() / (grad_gan.norm() + 1e-6)
+        grad_vq, grad_gan = fabric.all_reduce(torch.stack([grad_vq, grad_gan]).contiguous())
+        self.discriminator.grad_vq_ema.mul_(self.grad_ema_decay).add_(grad_vq, alpha=1 - self.grad_ema_decay)
+        self.discriminator.grad_gan_ema.mul_(self.grad_ema_decay).add_(grad_gan, alpha=1 - self.grad_ema_decay)
+        scale = self.discriminator.grad_vq_ema.norm() / (self.discriminator.grad_gan_ema.norm() + 1e-6)
         scale.clamp_(max=1e4)
         return scale
 
