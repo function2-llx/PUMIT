@@ -1,9 +1,10 @@
 import einops
 import torch
 
+from luolib.utils import RGB_TO_GRAY_WEIGHT
+
 __all__ = [
     'ensure_rgb',
-    'RGB_TO_GRAY_WEIGHT',
     'rgb_to_gray',
 ]
 
@@ -16,8 +17,6 @@ def ensure_rgb(x: torch.Tensor, batched: bool = False) -> tuple[torch.Tensor, bo
         x = einops.repeat(x, f'{maybe_batch} 1 ... -> c ...', c=3)
         not_rgb = True
     return x, not_rgb
-
-RGB_TO_GRAY_WEIGHT = (0.299, 0.587, 0.114)
 
 def rgb_to_gray(x: torch.Tensor, batched: bool = False) -> torch.Tensor:
     """x need not be scaled of [0, 1] since sum(RGB_TO_GRAY_WEIGHT) ≈ 1"""

@@ -40,7 +40,7 @@ class VQVTLoss(nn.Module):
         Args:
             post_family: family of post distribution, laplace → l1, normal → l2
             rec_scale: whether reconstruction has the scale parameter
-            adaptive_gan_weight: do you like VQGAN?
+            adaptive_gan_weight: use adaptive weight according to VQGAN
             max_log_scale: log_scale lather than this value will be clamped. empirically, this value should be smaller
             with Laplace than normal
         """
@@ -183,8 +183,17 @@ class VQVTLoss(nn.Module):
         x_rec_logit: spadop.SpatialTensor,
         log_dict: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, dict]:
-        score_real = self.discriminator(x_logit.detach())
-        score_fake = self.discriminator(x_rec_logit[:, :x_logit.shape[1]].detach())
-        disc_loss = 0.5 * hinge_loss(score_real, score_fake)
-        log_dict['disc_loss'] = disc_loss
+        # discriminator is usually a small network, concat and make it a little faster
+        batch_size = x_logit.shape[0]
+        logits = torch.cat([x_logit, x_rec_logit[:, :x_logit.shape[1]].detach()], 0)
+        scores = self.discriminator(logits)
+        score_real, score_fake = scores[:batch_size], scores[batch_size:]
+        real_loss = (1 - score_real).relu().mean()
+        fake_loss = (1 + score_fake).relu().mean()
+        disc_loss = 0.5 * (real_loss + fake_loss)
+        log_dict.update({
+            'disc_loss': disc_loss,
+            'disc_loss_real': real_loss,
+            'disc_loss_fake': fake_loss,
+        })
         return disc_loss, log_dict

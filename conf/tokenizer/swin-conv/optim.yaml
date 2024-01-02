@@ -2,8 +2,8 @@ model: model.yaml
 training:
   max_steps: 1000000
   disc_loss_momentum: 0.9
-  gan_start_th: 0.02
-  gan_stop_th: 0.2
+  gan_start_th: 0.01
+  gan_stop_th: 0.1
   grad_norm_g: 10
   grad_norm_d: 1
   accumulate_grad_batches: 1
