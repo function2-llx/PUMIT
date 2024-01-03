@@ -37,7 +37,6 @@ class VQVTLoss(nn.Module):
         self,
         quant_weight: float,
         entropy_weight: float,
-        # post_family: Literal['Laplace', 'normal'],
         rec_loss: Literal['l1', 'l2', 'smooth_l1'],
         rec_loss_beta: float,
         rec_scale: bool,
@@ -49,6 +48,8 @@ class VQVTLoss(nn.Module):
         adaptive_gan_weight: bool,
         grad_ema_decay: float,
         gan_ema_decay: float,
+        gan_start_th: float,
+        gan_stop_th: float,
         max_log_scale: float = 8,
     ):
         """
@@ -84,6 +85,8 @@ class VQVTLoss(nn.Module):
         self.max_log_scale = max_log_scale
         self.grad_ema_decay = grad_ema_decay
         self.gan_ema_decay = gan_ema_decay
+        self.gan_start_th = gan_start_th
+        self.gan_stop_th = gan_stop_th
         self.register_buffer('real_loss_ema', torch.tensor(1.))
         self.register_buffer('fake_loss_ema', torch.tensor(1.))
         self.eval()
@@ -132,6 +135,7 @@ class VQVTLoss(nn.Module):
         log_dict['rec_loss'] = loss
         return loss, log_dict
 
+    # FIXME: current implementation of EMA is incompatible with gradient accumulation
     grad_vq_ema: torch.Tensor
     grad_gan_ema: torch.Tensor
 
@@ -162,9 +166,9 @@ class VQVTLoss(nn.Module):
         x_rec: spadop.SpatialTensor,
         x_rec_logit: spadop.SpatialTensor,
         vq_out: VectorQuantizerOutput,
-        use_gan_th: float,
+        use_gan_loss: bool,
         fabric: Fabric | None = None,
-    ) -> tuple[torch.Tensor, dict]:
+    ) -> tuple[torch.Tensor, dict, bool]:
         """
         Args:
             x_rec_logit: this may be (mu, scale) of the reconstruction logit
@@ -182,7 +186,12 @@ class VQVTLoss(nn.Module):
             real_loss, fake_loss = fabric.all_reduce(torch.stack([real_loss, fake_loss]))
         ema_update(self.real_loss_ema, real_loss, self.gan_ema_decay)
         ema_update(self.fake_loss_ema, fake_loss, self.gan_ema_decay)
-        use_gan_loss = self.real_loss_ema <= use_gan_th and self.fake_loss_ema <= use_gan_th
+
+        if self.real_loss_ema <= self.gan_start_th and self.fake_loss_ema <= self.gan_start_th:
+            use_gan_loss = True
+        if self.real_loss_ema > self.gan_stop_th or self.fake_loss_ema > self.gan_stop_th:
+            use_gan_loss = False
+
         gan_loss = -score_fake.mean()
         if self.adaptive_gan_weight:
             gan_loss_scale = self.adapt_gan_weight(vq_loss, gan_loss, fabric)
@@ -213,4 +222,4 @@ class VQVTLoss(nn.Module):
             log_dict['l2'] = nnf.mse_loss(x_rec, x)
         if vq_out.entropy is not None:
             log_dict['entropy'] = vq_out.entropy
-        return loss, log_dict
+        return loss, log_dict, use_gan_loss

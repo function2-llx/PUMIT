@@ -1,7 +1,6 @@
 model: model.yaml
 training:
   max_steps: 1000000
-  use_gan_th: 0.1
   grad_norm_g: 10
   grad_norm_d: 10
   accumulate_grad_batches: 1

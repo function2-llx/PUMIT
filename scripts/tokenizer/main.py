@@ -222,6 +222,7 @@ def main():
         'optimizer_g': optimizer_g,
         'optimizer_d': optimizer_d,
         'step': 0,
+        'use_gan_loss': False,
     }
     # NOTE: learning rate update frequency should divide the step to recover the learning rate
     load_state(model, loss_module, state, training_args, fabric)
@@ -257,9 +258,9 @@ def main():
             # 1. generator part
             with fabric.no_backward_sync(model, accumulating):
                 x_rec, x_rec_logit, vq_out = model(x_logit, autoencode=True, fabric=fabric)
-                loss, log_dict = loss_module.forward_gen(
+                loss, log_dict, state['use_gan_loss'] = loss_module.forward_gen(
                     x, x_logit, x_rec, x_rec_logit, vq_out,
-                    training_args.use_gan_th, fabric,
+                    state['use_gan_loss'], fabric,
                 )
                 fabric.backward(loss / training_args.accumulate_grad_batches)
             check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
