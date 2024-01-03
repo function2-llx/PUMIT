@@ -43,7 +43,6 @@ class TrainingArguments:
     output_root: Path = 'output'
     output_dir: Path | None = None
     exp_name: str
-    use_gan_th: float
     gan_start_step: int
     benchmark: bool = False
     pretrained_codebook: Path | None = None
