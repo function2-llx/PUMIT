@@ -222,7 +222,6 @@ def main():
         'optimizer_g': optimizer_g,
         'optimizer_d': optimizer_d,
         'step': 0,
-        'use_gan_loss': True,
     }
     # NOTE: learning rate update frequency should divide the step to recover the learning rate
     load_state(model, loss_module, state, training_args, fabric)
@@ -260,7 +259,7 @@ def main():
                 x_rec, x_rec_logit, vq_out = model(x_logit, autoencode=True, fabric=fabric)
                 loss, log_dict = loss_module.forward_gen(
                     x, x_logit, x_rec, x_rec_logit, vq_out,
-                    state['use_gan_loss'], fabric,
+                    training_args.use_gan_th, fabric,
                 )
                 fabric.backward(loss / training_args.accumulate_grad_batches)
             check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
@@ -303,6 +302,7 @@ def main():
             optimizer_d.zero_grad()
             with torch.no_grad():
                 teacher_update_momentum = training_args.get_teacher_update_momentum(step)
+                metric_dict.update_metrics({'disc/teacher_update_momentum': teacher_update_momentum})
                 # FIXME: order?
                 for p_teacher, p_student in zip(loss_module.discriminator.parameters(), disc_student.parameters()):
                     ema_update(p_teacher, p_student, teacher_update_momentum)
