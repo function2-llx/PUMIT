@@ -39,6 +39,8 @@ class TrainingArguments:
     grad_norm_g: float | None = None
     grad_norm_d: float | None = None
     resume_ckpt_path: Path | None = None
+    resume_id: str | None = None
+    """wandb run id"""
     pretrained_ckpt_path: Path | None = None
     output_root: Path = 'output'
     output_dir: Path | None = None
@@ -179,7 +181,7 @@ def main():
     if training_args.output_dir is None:
         training_args.output_dir = training_args.output_root / training_args.exp_name
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
-    logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='pumit')
+    logger = WandbLogger(training_args.exp_name, training_args.output_dir, project='pumit', id=training_args.resume_id)
     fabric = Fabric(precision=training_args.precision, loggers=logger)
     print('precision:', fabric.strategy.precision.precision)
     fabric.seed_everything(training_args.seed)
