@@ -1,4 +1,6 @@
+from copy import deepcopy
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from jsonargparse import ActionConfigFile, ArgumentParser
@@ -15,11 +17,13 @@ from tqdm import trange
 from luolib.lightning import OptimizationConf, build_hybrid_optimization
 from luolib.models.spadop import SpatialTensor
 from luolib.models.utils import load_ckpt
+from luolib.utils import ema_update
 from luolib.utils.grad import grad_norm
 
 from pumit.datamodule import PUMITDataModule
 from pumit.tokenizer import LOGIT_EPS, VQVTLoss, VQVisualTokenizer
-from pumit.tokenizer.discriminator import PatchDiscriminatorBase
+from pumit.tokenizer.discriminator import PatchDiscriminatorBase, get_disc_scores
+from pumit.tokenizer.loss import hinge_gan_loss
 from pumit.tokenizer.vq import GumbelVQ
 from pumit.transforms import rgb_to_gray
 
@@ -39,14 +43,23 @@ class TrainingArguments:
     output_root: Path = 'output'
     output_dir: Path | None = None
     exp_name: str
-    disc_loss_momentum: float = 0.9
-    gan_start_th: float = 0.05
-    gan_stop_th: float = 0.2
+    use_gan_th: float
     gan_start_step: int
     benchmark: bool = False
     pretrained_codebook: Path | None = None
     fix_codebook: bool = False
     precision: str = '32-true'
+
+    @dataclass
+    class TeacherUpdate:
+        base_momentum: float
+        schedule: bool
+    teacher_update: TeacherUpdate
+
+    def get_teacher_update_momentum(self, step: int) -> float:
+        if not self.teacher_update.schedule:
+            return self.teacher_update.base_momentum
+        return 1 - (1 - self.teacher_update.base_momentum) * (math.cos(step / self.max_steps * math.pi) + 1) / 2
 
 def get_parser():
     parser = ArgumentParser(parser_mode='omegaconf')
@@ -78,17 +91,15 @@ class MetricDict(dict):
         self.clear()
         return ret
 
-def log_dict_split(fabric: FabricBase, split: str, metric_dict: MetricDict, step: int | None = None):
+def reduce_log(fabric: FabricBase, prefix: str, metric_dict: MetricDict, step: int | None = None):
     metric_dict = fabric.all_reduce(metric_dict.reduce())
-    if split == '':
-        prefix = ''
-    else:
-        prefix = f'{split}/'
-    metric_dict = {
+    if prefix != '':
+        prefix = f'{prefix}/'
+    log_dict = {
         f'{prefix}{k}': v
         for k, v in metric_dict.items()
     }
-    fabric.log_dict(metric_dict, step)
+    fabric.log_dict(log_dict, step)
 
 class Timer:
     @staticmethod
@@ -188,8 +199,11 @@ def main():
     model: VQVisualTokenizer | _FabricModule = args.model
     optimizer_g, lr_scheduler_g = build_hybrid_optimization(model, args.optim_g)
     loss_module: VQVTLoss = args.loss
+    disc_student: PatchDiscriminatorBase | _FabricModule = deepcopy(loss_module.discriminator)
+    disc_student.train()
+    disc_student.requires_grad_(True)
     loss_module.set_gan_ref_param(model.get_ref_param())
-    optimizer_d, lr_scheduler_d = build_hybrid_optimization(loss_module.discriminator, args.optim_d)
+    optimizer_d, lr_scheduler_d = build_hybrid_optimization(disc_student, args.optim_d)
 
     if fabric.is_global_zero:
         Path(save_dir / 'model.txt').write_text(repr(model))
@@ -198,17 +212,17 @@ def main():
     # setup optimizer before loading the checkpoint: https://github.com/Lightning-AI/pytorch-lightning/issues/19225
     model, optimizer_g = fabric.setup(model, optimizer_g)
     loss_module = fabric.to_device(loss_module)
-    loss_module.discriminator, optimizer_d = fabric.setup(loss_module.discriminator, optimizer_d)
-    discriminator: PatchDiscriminatorBase | _FabricModule = loss_module.discriminator
+    disc_student, optimizer_d = fabric.setup(disc_student, optimizer_d)
     # override 16-mixed precision plugin, Fabric should have provided such flexible interface in .setup()
-    discriminator._precision = Precision()
+    disc_student._precision = Precision()
     state = {
         'model': model,
-        'discriminator': loss_module.discriminator,
+        'disc': disc_student,
+        'loss': loss_module,
         'optimizer_g': optimizer_g,
         'optimizer_d': optimizer_d,
         'step': 0,
-        'use_gan_loss': False,
+        'use_gan_loss': True,
     }
     # NOTE: learning rate update frequency should divide the step to recover the learning rate
     load_state(model, loss_module, state, training_args, fabric)
@@ -226,7 +240,6 @@ def main():
 
     metric_dict = MetricDict()
     grad_norm_dict = MetricDict()
-    disc_loss_ema = 1.
     train_loader_iter = iter(train_loader)
     for step in trange(
         training_args.max_steps,
@@ -243,10 +256,8 @@ def main():
             x = SpatialTensor(x, aniso_d)
             x_logit = x.logit(LOGIT_EPS)
             # 1. generator part
-            discriminator.requires_grad_(False)
             with fabric.no_backward_sync(model, accumulating):
                 x_rec, x_rec_logit, vq_out = model(x_logit, autoencode=True, fabric=fabric)
-                # TODO: disable DDP forward for discriminator in this part
                 loss, log_dict = loss_module.forward_gen(
                     x, x_logit, x_rec, x_rec_logit, vq_out,
                     state['use_gan_loss'], fabric,
@@ -254,17 +265,16 @@ def main():
                 fabric.backward(loss / training_args.accumulate_grad_batches)
             check_loss(loss, state, batch, save_dir / 'bad-g', fabric)
             # 2. discriminator part
-            if state['use_gan_loss']:
-                # if generator is using gan loss, then fix discriminator (simulate alternative training)
-                discriminator.eval()
-                with torch.no_grad():
-                    disc_loss, log_dict = loss_module.forward_disc(x_logit, x_rec_logit, log_dict)
-            else:
-                discriminator.train()
-                discriminator.requires_grad_(True)
-                with fabric.no_backward_sync(discriminator, accumulating):
-                    disc_loss, log_dict = loss_module.forward_disc(x_logit, x_rec_logit, log_dict)
-                    fabric.backward(disc_loss / training_args.accumulate_grad_batches)
+            with fabric.no_backward_sync(disc_student, accumulating):
+                score_real, score_fake = get_disc_scores(disc_student, x_logit, x_rec_logit[:, :x.shape[1]].detach())
+                real_loss, fake_loss = hinge_gan_loss(score_real, score_fake)
+                disc_loss = 0.5 * (real_loss + fake_loss)
+                log_dict.update({
+                    'disc/loss': disc_loss,
+                    'disc/real': real_loss,
+                    'disc/fake': fake_loss,
+                })
+                fabric.backward(disc_loss / training_args.accumulate_grad_batches)
             check_loss(disc_loss, state, batch, save_dir / 'bad-d', fabric)
             metric_dict.update_metrics(log_dict)
             if accumulating:
@@ -285,25 +295,21 @@ def main():
             if step % lr_scheduler_d.frequency == 0:
                 lr_scheduler_d.scheduler.step(step)
                 fabric.log('lr-d', optimizer_d.param_groups[0]['lr'], step)
-            if not state['use_gan_loss']:
-                fabric.unscale_gradients(optimizer_d)
-                grad_norm_dict.update_metrics({'disc': grad_norm(discriminator)})
-                fabric.clip_gradients(discriminator, optimizer_d, max_norm=training_args.grad_norm_d, unscale_gradients=False)
-                grad_norm_dict.update_metrics({'disc-clipped': grad_norm(discriminator)})
-                optimizer_d.step()
-                optimizer_d.zero_grad()
+            fabric.unscale_gradients(optimizer_d)
+            grad_norm_dict.update_metrics({'disc': grad_norm(disc_student)})
+            fabric.clip_gradients(disc_student, optimizer_d, max_norm=training_args.grad_norm_d, unscale_gradients=False)
+            grad_norm_dict.update_metrics({'disc-clipped': grad_norm(disc_student)})
+            optimizer_d.step()
+            optimizer_d.zero_grad()
+            with torch.no_grad():
+                teacher_update_momentum = training_args.get_teacher_update_momentum(step)
+                # FIXME: order?
+                for p_teacher, p_student in zip(loss_module.discriminator.parameters(), disc_student.parameters()):
+                    ema_update(p_teacher, p_student, teacher_update_momentum)
             # -1. logging, plotting, saving, etc.
-            disc_loss = sum(metric_dict['disc_loss']) / len(metric_dict['disc_loss'])
-            disc_loss = fabric.all_reduce(disc_loss).item()
-            disc_loss_ema = disc_loss_ema * training_args.disc_loss_momentum + disc_loss * (1 - training_args.disc_loss_momentum)
-            if optimization_step >= training_args.gan_start_step and disc_loss_ema < training_args.gan_start_th:
-                state['use_gan_loss'] = True
-            elif disc_loss_ema > training_args.gan_stop_th:
-                state['use_gan_loss'] = False
-            metric_dict.update_metrics({'disc_loss_ema': disc_loss_ema})
             if optimization_step % training_args.log_every_n_steps == 0 or optimization_step == training_args.max_steps:
-                log_dict_split(fabric, 'train', metric_dict, optimization_step)
-                log_dict_split(fabric, 'grad-norm', grad_norm_dict, optimization_step)
+                reduce_log(fabric, 'train', metric_dict, optimization_step)
+                reduce_log(fabric, 'grad-norm', grad_norm_dict, optimization_step)
                 if isinstance(model.quantize, GumbelVQ):
                     fabric.log('train/temperature', model.quantize.temperature, optimization_step)
             if optimization_step % training_args.plot_image_every_n_steps == 0 and fabric.is_global_zero:

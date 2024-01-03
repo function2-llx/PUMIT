@@ -10,18 +10,23 @@ __all__ = [
     'PatchDiscriminator',
     'SimplePatchDiscriminator',
     'SwinPatchDiscriminator',
+    'get_disc_scores',
 ]
 
 class PatchDiscriminatorBase(nn.Module):
-    # save state
-    grad_vq_ema: torch.Tensor
-    grad_gan_ema: torch.Tensor
-
     def forward(self, x: spadop.SpatialTensor):
         """
         Returns:
             patch wise logit of (batch_size, 1, *spatial_shape / patch_size)
         """
+
+def get_disc_scores(discriminator: PatchDiscriminatorBase, real: torch.Tensor, fake: torch.Tensor):
+    batch_size = real.shape[0]
+    # discriminator is usually a small network, concat and make it a little faster
+    logits = torch.cat([real, fake], 0)
+    scores = discriminator(logits)
+    score_real, score_fake = scores[:batch_size], scores[batch_size:]
+    return score_real, score_fake
 
 class PatchDiscriminator(PatchDiscriminatorBase):
     def __init__(self, in_channels: int, num_downsample_layers: int, base_channels: int):
@@ -79,14 +84,13 @@ class SwinPatchDiscriminator(nn.Sequential, PatchDiscriminatorBase):
         self,
         in_channels: int,
         patch_size: int,
-        patch_embed_kernel_size: int,
         dim: int,
         depth: int,
         num_heads: int,
     ):
         super().__init__(
             spadop.PatchEmbed(
-                in_channels, dim, patch_size, patch_embed_kernel_size, True,
+                in_channels, dim, patch_size, 3, True,
             ),
             spadop.SwinLayer(dim, depth, num_heads, 4, last_norm=True),
             spadop.Conv3d(dim, 1, 1),

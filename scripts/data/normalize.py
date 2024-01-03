@@ -12,6 +12,7 @@ from luolib.utils import DataKey
 from monai import transforms as mt
 from monai.data import MetaTensor
 from monai.transforms import ToTensorD
+
 from pumit.reader import PUMITReader
 
 class NormalizeIntensityD(mt.Transform):
