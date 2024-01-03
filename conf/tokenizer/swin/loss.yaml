@@ -1,6 +1,6 @@
 quant_weight: 1
 entropy_weight: 0.05
-rec_loss: smooth_l1
+rec_loss: l1
 rec_loss_beta: 1
 rec_scale: true
 rec_weight: 1
