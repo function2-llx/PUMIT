@@ -246,7 +246,6 @@ def main():
     for step in trange(
         optimization_step, training_args.max_steps,
         initial=optimization_step, total=training_args.max_steps,
-        initial=optimization_step, total=training_args.max_steps,
         desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0,
     ):
         optimization_step = step + 1
