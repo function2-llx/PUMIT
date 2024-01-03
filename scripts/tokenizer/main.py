@@ -227,6 +227,7 @@ def main():
     }
     # NOTE: learning rate update frequency should divide the step to recover the learning rate
     load_state(model, loss_module, state, training_args, fabric)
+    # how many optimization steps have been taking
     optimization_step = state['step']
 
     datamodule: PUMITDataModule = args.data
@@ -243,8 +244,10 @@ def main():
     grad_norm_dict = MetricDict()
     train_loader_iter = iter(train_loader)
     for step in trange(
-        training_args.max_steps,
-        desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0, initial=optimization_step
+        optimization_step, training_args.max_steps,
+        initial=optimization_step, total=training_args.max_steps,
+        initial=optimization_step, total=training_args.max_steps,
+        desc='training', dynamic_ncols=True, disable=fabric.local_rank != 0,
     ):
         optimization_step = step + 1
         if isinstance(model.quantize, GumbelVQ):
