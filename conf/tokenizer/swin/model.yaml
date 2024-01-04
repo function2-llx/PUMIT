@@ -3,7 +3,7 @@ init_args:
   quantize:
     class_path: pumit.tokenizer.vq.SoftVQ
     init_args:
-      num_embeddings: 1024
+      num_embeddings: 4096
       embedding_dim: 256
       prune: 16
   in_channels: 3

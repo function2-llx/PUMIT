@@ -26,7 +26,7 @@ class SwinVQVT(VQVisualTokenizer):
         """
         super().__init__(*args, **kwargs)
         self.encoder = nn.Sequential(
-            spadop.PatchEmbed(in_channels, encoder_dim, 16, 3, True),
+            spadop.PatchEmbed(in_channels, encoder_dim, 16, 4, True),
             spadop.SwinLayer(
                 encoder_dim, encoder_depth, encoder_num_heads, 4,
                 last_norm=True, grad_ckpt=grad_ckpt,
