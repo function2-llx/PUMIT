@@ -123,4 +123,4 @@ class SwinConvVQVT(VQVisualTokenizer):
         return self.decoder(z_q)
 
     def get_ref_param(self) -> nn.Parameter | None:
-        return self.decoder[-1].weight
+        return self.decoder[-1][-1].weight
