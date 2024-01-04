@@ -21,8 +21,8 @@ discriminator:
     depth: 6
     num_heads: 8
 gan_weight: 0.2
-grad_ema_decay: 0.9
 gan_ema_decay: 0.9
 gan_start_th: 0.01
 gan_stop_th: 0.1
+grad_ema_decay: 0.9
 adaptive_gan_weight: true

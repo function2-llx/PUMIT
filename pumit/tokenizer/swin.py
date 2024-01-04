@@ -89,7 +89,7 @@ class SwinConvVQVT(VQVisualTokenizer):
         self.encoder = nn.Sequential(
             *cytoolz.concat([
                 [
-                    spadop.PatchEmbed(in_channels, dim >> num_downsamples, 4, 3, True)
+                    spadop.PatchEmbed(in_channels, dim >> num_downsamples, 4, 4, True)
                     if i == 0 else spadop.Conv3d(dim >> num_downsamples - i + 1, dim >> num_downsamples - i, 2, 2),
                     spadop.SwinLayer(
                         dim >> num_downsamples - i, depths[i], num_heads >> num_downsamples - i, 4,
@@ -106,12 +106,14 @@ class SwinConvVQVT(VQVisualTokenizer):
             *cytoolz.concat([
                 [
                     nn.Identity() if i == 0 else
-                    spadop.TransposedConv3d(dim >> i - 1, dim >> i, 2, 2),
+                    spadop.TransposedConv3d(dim >> i - 1, dim >> i, 4, 2),
                     ResNetBasicBlock(dim >> i, num_groups >> i),
                 ]
                 for i in range(num_upsamples + 1)
             ]),
-            spadop.TransposedConv3d(dim >> num_upsamples, in_channels * 2, 4, 4),
+            spadop.InversePatchEmbed(
+                dim >> num_upsamples, in_channels * 2, 4, 4, True, 'silu',
+            ),
         )
 
     def encode(self, x: spadop.SpatialTensor) -> spadop.SpatialTensor:
