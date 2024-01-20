@@ -1,6 +1,6 @@
 import sys
 
-sys.path.append("third-party/LuoLib/luolib")
+sys.path.append("third-party/")
 sys.path.append("./")
 
 from collections import OrderedDict
