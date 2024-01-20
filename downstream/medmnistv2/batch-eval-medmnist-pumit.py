@@ -29,7 +29,7 @@ for lr in lrs:
         print(f"{db} {lr}")
         os.environ["CUDA_VISIBLE_DEVICES"] = str(0)
         os.system(
-            f"python downstream/medmnistv2/eval-medmnist.py --model_path /data/PUMIT/archive/pumit-b.ckpt \
+            f"python downstream/medmnistv2/eval-medmnist.py --model_path ./pre-trained/pumt.ckpt \
             --arch PUMIT --data_flag {db} --run lr_{lr:.0e} --lr {lr}"
             + (
             " --interpolate"
