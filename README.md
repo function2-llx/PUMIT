@@ -1,4 +1,10 @@
-# PUMT
+# PUMIT
+
+This is the code repository for the paper *Building Universal Foundation Models for Medical Image Analysis with Spatially Adaptive Networks* ([arxiv](https://arxiv.org/abs/2312.07630), former name: *Pre-trained Universal Medical Image Transformer*).
+
+Pre-trained model weights can be found in the [release page](https://github.com/function2-llx/PUMIT/releases/tag/v1).
+
+The code release is for reproducing results of the paper and also used for double-blinded review, which may not look nice. You may switch to the `dev` branch to see a cleaner version of code (but is also further developed, so it may not be consistent).
 
 ## Create Environment
 
@@ -40,7 +46,7 @@ scripts/model/mim-b.zsh --data.dl_conf.train_batch_size 14 --data.dl_conf.num_wo
 
 ## Run Downstream Tasks
 
-Assume that the pre-trained checkpoint is placed at `./pre-trained/pumt.ckpt`.
+Assume that the pre-trained checkpoint is placed at `./pre-trained/pumit.ckpt`.
 
 ### Classification
 
