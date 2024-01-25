@@ -4,7 +4,7 @@ This is the code repository for the paper *Building Universal Foundation Models 
 
 Pre-trained model weights can be found in the [release page](https://github.com/function2-llx/PUMIT/releases/tag/v1).
 
-The code release is for reproducing results of the paper and also used for double-blinded review, which may not look nice. You may switch to the `dev` branch to see a cleaner version of code (but is also further developed, so it may not be consistent).
+The code release is for reproducing results of the paper and also used for double-blinded review, which may not look nice. You may switch to the [`dev`](https://github.com/function2-llx/PUMIT/tree/dev) branch to see a cleaner version of code (but is also further developed, so it may not be consistent).
 
 ## Create Environment
 
